@@ -121,7 +121,13 @@ echo -e "${YELLOW}Command Parsing Tests${NC}"
 
 # Test various command patterns (these should fail gracefully without config)
 run_test "Invalid number arg" "'$CRABCODE' abc 2>&1 | grep -qE '(Invalid|Error)'"
-run_test "Unknown subcommand" "'$CRABCODE' 1 foobar 2>&1 | grep -qE '(Unknown|mean)'"
+
+# Only test subcommand parsing if yq is installed (otherwise script exits early)
+if command -v yq &>/dev/null; then
+  run_test "Unknown subcommand" "'$CRABCODE' 1 foobar 2>&1 | grep -qE '(Unknown|mean)'"
+else
+  echo -e "  ${YELLOW}Skipping subcommand test (yq not installed)${NC}"
+fi
 
 # =============================================================================
 # Integration Tests (require Docker or real setup)
