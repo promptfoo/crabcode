@@ -1,0 +1,73 @@
+# End-to-end test environment for crabcode
+# Simulates promptfoo-cloud setup from scratch
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    bash \
+    curl \
+    git \
+    tmux \
+    procps \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install yq
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.35.1/yq_linux_amd64 -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq
+
+# Create test user
+RUN useradd -m -s /bin/bash testuser
+USER testuser
+WORKDIR /home/testuser
+
+# Set up git config
+RUN git config --global user.email "test@test.com" \
+    && git config --global user.name "Test User" \
+    && git config --global init.defaultBranch main \
+    && git config --global protocol.file.allow always
+
+# Create mock promptfoo-cloud repo structure
+RUN mkdir -p ~/Dev-Promptfoo/promptfoo-cloud && \
+    cd ~/Dev-Promptfoo/promptfoo-cloud && \
+    git init && \
+    mkdir -p server app && \
+    echo 'API_PORT=3200\nAPI_URL=http://localhost:3200' > server/.env.example && \
+    echo 'VITE_API_BASE_URL=http://localhost:3200' > app/.env.example && \
+    echo '{"name": "promptfoo-cloud", "scripts": {"dev": "echo server running"}}' > server/package.json && \
+    echo '{"name": "promptfoo-app", "scripts": {"dev": "echo app running"}}' > app/package.json && \
+    echo "# Promptfoo Cloud" > README.md && \
+    git add . && \
+    git commit -m "Initial commit"
+
+# Create mock submodule (promptfoo)
+RUN mkdir -p ~/Dev-Promptfoo/promptfoo-oss && \
+    cd ~/Dev-Promptfoo/promptfoo-oss && \
+    git init && \
+    echo '{"name": "promptfoo"}' > package.json && \
+    echo 'PROMPTFOO_REMOTE_GENERATION_URL=http://localhost:3200/task' > .env.example && \
+    git add . && \
+    git commit -m "Initial promptfoo commit"
+
+# Add submodule to main repo
+RUN cd ~/Dev-Promptfoo/promptfoo-cloud && \
+    git submodule add ~/Dev-Promptfoo/promptfoo-oss promptfoo && \
+    git commit -m "Add promptfoo submodule"
+
+# Create workspace directory
+RUN mkdir -p ~/Dev-Promptfoo/subfolder
+
+# Copy crabcode
+COPY --chown=testuser:testuser src/crabcode /usr/local/bin/crabcode
+RUN chmod +x /usr/local/bin/crabcode
+
+# Copy test script
+COPY --chown=testuser:testuser tests/e2e/run_e2e.sh /home/testuser/run_e2e.sh
+RUN chmod +x /home/testuser/run_e2e.sh
+
+# Copy example config
+COPY --chown=testuser:testuser examples/promptfoo-cloud.yaml /home/testuser/promptfoo-cloud-config.yaml
+
+CMD ["/home/testuser/run_e2e.sh"]
