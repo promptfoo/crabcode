@@ -1,0 +1,44 @@
+# Example: Promptfoo Cloud Configuration
+# The original use case that inspired crabcode
+
+session_name: crab
+workspace_base: ~/Dev-Promptfoo/subfolder
+main_repo: ~/Dev-Promptfoo/promptfoo-cloud
+
+workspaces:
+  count: 5
+  prefix: cloud-workspace
+  branch_pattern: workspace-{N}
+
+ports:
+  api_base: 3200    # ws1=3201, ws2=3202, etc.
+  app_base: 3000    # ws1=3001, ws2=3002, etc.
+
+install_command: pnpm install
+
+layout:
+  panes:
+    - name: terminal
+      command: ""
+    - name: server
+      command: pnpm dev
+    - name: main
+      command: claude --dangerously-skip-permissions --chrome
+
+env_sync:
+  files:
+    - path: server/.env
+      port_var: API_PORT
+    - path: app/.env
+      port_var: VITE_API_BASE_URL
+    - path: promptfoo/.env
+      port_var: PROMPTFOO_REMOTE_GENERATION_URL
+
+submodules:
+  - path: promptfoo
+    reset_to: origin/main
+    install_command: pnpm install
+
+cleanup:
+  preserve_files: ".env"
+  kill_pattern: "cloud-workspace-{N}.*pnpm|cloud-workspace-{N}.*node"

@@ -1,0 +1,39 @@
+# Example: Node.js Monorepo Configuration
+# Typical setup for a pnpm/npm monorepo with frontend and backend
+
+session_name: myapp
+workspace_base: ~/Dev/my-project/workspaces
+main_repo: ~/Dev/my-project
+
+workspaces:
+  count: 5
+  prefix: workspace
+  branch_pattern: workspace-{N}
+
+ports:
+  api_base: 3200    # ws1=3201, ws2=3202, etc.
+  app_base: 3000    # ws1=3001, ws2=3002, etc.
+
+install_command: pnpm install
+
+layout:
+  panes:
+    - name: terminal
+      command: ""
+    - name: server
+      command: pnpm dev
+    - name: main
+      command: claude --dangerously-skip-permissions
+
+env_sync:
+  files:
+    - path: server/.env
+      port_var: API_PORT
+    - path: app/.env
+      port_var: VITE_API_PORT
+    - path: web/.env
+      port_var: VITE_API_BASE_URL
+
+cleanup:
+  preserve_files: ".env"
+  kill_pattern: "{PREFIX}-{N}.*node"

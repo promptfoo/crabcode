@@ -1,0 +1,37 @@
+# Example: Python Project Configuration
+# Setup for a Python backend with uvicorn/FastAPI
+
+session_name: pydev
+workspace_base: ~/Dev/python-api/workspaces
+main_repo: ~/Dev/python-api
+
+workspaces:
+  count: 3
+  prefix: dev
+  branch_pattern: feature-{N}
+
+ports:
+  api_base: 8000    # ws1=8001, ws2=8002, etc.
+  app_base: 5170    # ws1=5171, ws2=5172, etc. (for Vite frontend if any)
+
+install_command: pip install -e ".[dev]"
+
+layout:
+  panes:
+    - name: terminal
+      command: ""
+    - name: server
+      command: uvicorn app.main:app --reload --port $API_PORT
+    - name: main
+      command: claude --dangerously-skip-permissions
+
+env_sync:
+  files:
+    - path: .env
+      port_var: PORT
+    - path: frontend/.env
+      port_var: VITE_API_URL
+
+cleanup:
+  preserve_files: ".env"
+  kill_pattern: "{PREFIX}-{N}.*uvicorn"

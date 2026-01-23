@@ -1,0 +1,1855 @@
+#!/usr/bin/env bash
+# crabcode - Generic tmux-based workspace manager for multi-repo development
+# https://github.com/your-org/crabcode
+#
+# Usage: crabcode [command] [arguments]
+#
+# Commands:
+#   (no args)         List all workspaces
+#   <N>               Open/create workspace N
+#   <N> --separate    Open workspace N in separate terminal window
+#   <N> cleanup       Kill window + reset to origin/main
+#   <N> restart       Reset git + restart panes in place
+#   <N> continue      Resume session with --continue flag
+#   restart           Auto-detect workspace from cwd + restart
+#   continue          Auto-detect workspace from cwd + resume
+#   init              Interactive config setup
+#   config            Show current configuration
+#   doctor            Diagnose common issues
+#   cheat             Show cheat sheet / help
+#   ports             Show port usage across workspaces
+#   wip save          Save work in progress
+#   wip ls            List saved WIP states
+#   wip --continue    Restore most recent WIP
+#   wip --resume      Interactive WIP selection
+#   wip delete <name> Delete a WIP state
+
+set -e
+
+VERSION="0.1.0"
+CONFIG_DIR="$HOME/.crabcode"
+CONFIG_FILE="$CONFIG_DIR/config.yaml"
+WIP_BASE="$CONFIG_DIR/wip"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+NC='\033[0m' # No Color
+
+# =============================================================================
+# Utility Functions
+# =============================================================================
+
+error() {
+  echo -e "${RED}Error: $*${NC}" >&2
+}
+
+warn() {
+  echo -e "${YELLOW}Warning: $*${NC}" >&2
+}
+
+info() {
+  echo -e "${CYAN}$*${NC}"
+}
+
+success() {
+  echo -e "${GREEN}$*${NC}"
+}
+
+# Check if a command exists
+command_exists() {
+  command -v "$1" &>/dev/null
+}
+
+# =============================================================================
+# Config Loading (using yq for YAML parsing)
+# =============================================================================
+
+# Check if yq is installed
+check_yq() {
+  if ! command_exists yq; then
+    error "yq is required but not installed."
+    echo "Install with:"
+    echo "  brew install yq       # macOS"
+    echo "  apt install yq        # Ubuntu/Debian"
+    echo "  go install github.com/mikefarah/yq/v4@latest  # Go"
+    exit 1
+  fi
+}
+
+# Load a config value, with optional default
+# Usage: config_get "path.to.value" "default"
+config_get() {
+  local path="$1"
+  local default="${2:-}"
+  local value
+
+  if [ ! -f "$CONFIG_FILE" ]; then
+    echo "$default"
+    return
+  fi
+
+  value=$(yq -r ".$path // \"\"" "$CONFIG_FILE" 2>/dev/null)
+  if [ -z "$value" ] || [ "$value" = "null" ]; then
+    echo "$default"
+  else
+    echo "$value"
+  fi
+}
+
+# Check if config exists and is valid
+config_exists() {
+  [ -f "$CONFIG_FILE" ]
+}
+
+# Validate required config fields
+validate_config() {
+  local errors=0
+
+  if ! config_exists; then
+    error "No config file found at $CONFIG_FILE"
+    echo "Run 'crabcode init' to create one."
+    exit 1
+  fi
+
+  local session_name=$(config_get "session_name")
+  local workspace_base=$(config_get "workspace_base")
+  local main_repo=$(config_get "main_repo")
+
+  if [ -z "$session_name" ]; then
+    error "Missing required config: session_name"
+    errors=$((errors + 1))
+  fi
+
+  if [ -z "$workspace_base" ]; then
+    error "Missing required config: workspace_base"
+    errors=$((errors + 1))
+  fi
+
+  if [ -z "$main_repo" ]; then
+    error "Missing required config: main_repo"
+    errors=$((errors + 1))
+  fi
+
+  if [ $errors -gt 0 ]; then
+    echo ""
+    echo "Run 'crabcode doctor' to diagnose issues."
+    exit 1
+  fi
+}
+
+# Expand ~ and environment variables in paths
+expand_path() {
+  local path="$1"
+  # Expand ~ to $HOME
+  path="${path/#\~/$HOME}"
+  # Expand environment variables
+  eval echo "$path"
+}
+
+# =============================================================================
+# Config Variables (loaded lazily)
+# =============================================================================
+
+_config_loaded=false
+
+load_config() {
+  if [ "$_config_loaded" = true ]; then
+    return
+  fi
+
+  check_yq
+
+  if ! config_exists; then
+    return
+  fi
+
+  SESSION_NAME=$(config_get "session_name" "crab")
+  WORKSPACE_BASE=$(expand_path "$(config_get "workspace_base")")
+  MAIN_REPO=$(expand_path "$(config_get "main_repo")")
+
+  WORKSPACE_COUNT=$(config_get "workspaces.count" "5")
+  WORKSPACE_PREFIX=$(config_get "workspaces.prefix" "workspace")
+  BRANCH_PATTERN=$(config_get "workspaces.branch_pattern" "workspace-{N}")
+
+  API_PORT_BASE=$(config_get "ports.api_base" "3200")
+  APP_PORT_BASE=$(config_get "ports.app_base" "3000")
+
+  _config_loaded=true
+}
+
+# =============================================================================
+# Port Management
+# =============================================================================
+
+# Find an available port starting from a base
+find_available_port() {
+  local base_port=$1
+  local port=$base_port
+  while lsof -i ":$port" &>/dev/null; do
+    port=$((port + 1))
+    # Safety limit - don't scan forever
+    if [ $port -gt $((base_port + 100)) ]; then
+      echo "$base_port"  # Give up, return original
+      return
+    fi
+  done
+  echo "$port"
+}
+
+# Get workspace ports (api and app) for workspace N
+# Returns: api_port:app_port:need_override
+get_workspace_ports() {
+  local num=$1
+  local dir=$2
+
+  local default_api=$((API_PORT_BASE + num))
+  local default_app=$((APP_PORT_BASE + num))
+
+  # Read from .env if env_sync is configured
+  local env_api=$(read_env_port "$dir" "api")
+  local env_app=$(read_env_port "$dir" "app")
+
+  [ -z "$env_api" ] && env_api="$default_api"
+  [ -z "$env_app" ] && env_app="$default_app"
+
+  local actual_api=$(find_available_port "$env_api")
+  local actual_app=$(find_available_port "$env_app")
+
+  local need_override="false"
+  if [ "$actual_api" != "$env_api" ] || [ "$actual_app" != "$env_app" ]; then
+    need_override="true"
+  fi
+
+  echo "$actual_api:$actual_app:$need_override:$env_api:$env_app"
+}
+
+# Read port from .env file based on env_sync config
+read_env_port() {
+  local dir=$1
+  local port_type=$2  # "api" or "app"
+
+  local env_files_count=$(yq -r '.env_sync.files | length // 0' "$CONFIG_FILE" 2>/dev/null)
+
+  for ((i=0; i<env_files_count; i++)); do
+    local env_path=$(yq -r ".env_sync.files[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    local port_var=$(yq -r ".env_sync.files[$i].port_var" "$CONFIG_FILE" 2>/dev/null)
+
+    [ -z "$env_path" ] || [ "$env_path" = "null" ] && continue
+
+    local full_path="$dir/$env_path"
+    if [ -f "$full_path" ] && [ -n "$port_var" ] && [ "$port_var" != "null" ]; then
+      local value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')
+      if [ -n "$value" ]; then
+        # If it's a URL, extract port
+        if [[ "$value" =~ :([0-9]+) ]]; then
+          echo "${BASH_REMATCH[1]}"
+          return
+        elif [[ "$value" =~ ^[0-9]+$ ]]; then
+          echo "$value"
+          return
+        fi
+      fi
+    fi
+  done
+}
+
+# Sync .env files for a workspace
+sync_env_files() {
+  local dir=$1
+  local api_port=$2
+  local quiet=${3:-false}
+
+  local env_files_count=$(yq -r '.env_sync.files | length // 0' "$CONFIG_FILE" 2>/dev/null)
+  [ "$env_files_count" = "0" ] && return
+
+  for ((i=0; i<env_files_count; i++)); do
+    local env_path=$(yq -r ".env_sync.files[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    local port_var=$(yq -r ".env_sync.files[$i].port_var" "$CONFIG_FILE" 2>/dev/null)
+
+    [ -z "$env_path" ] || [ "$env_path" = "null" ] && continue
+    [ -z "$port_var" ] || [ "$port_var" = "null" ] && continue
+
+    local full_path="$dir/$env_path"
+    local example_path="$dir/${env_path%.env}.env.example"
+    [ ! -f "$example_path" ] && example_path="$dir/$env_path.example"
+
+    # Create from example if needed
+    if [ ! -f "$full_path" ] && [ -f "$example_path" ]; then
+      cp "$example_path" "$full_path"
+      [ "$quiet" != "true" ] && echo -e "  ${YELLOW}Created $env_path from example${NC}"
+    fi
+
+    # Update port variable if file exists
+    if [ -f "$full_path" ] && grep -q "^${port_var}=" "$full_path" 2>/dev/null; then
+      local current_line=$(grep "^${port_var}=" "$full_path")
+      local current_value=$(echo "$current_line" | cut -d= -f2-)
+
+      # Extract current port
+      local current_port=""
+      if [[ "$current_value" =~ :([0-9]+) ]]; then
+        current_port="${BASH_REMATCH[1]}"
+      elif [[ "$current_value" =~ ^[0-9]+$ ]]; then
+        current_port="$current_value"
+      fi
+
+      if [ -n "$current_port" ] && [ "$current_port" != "$api_port" ]; then
+        # Replace port
+        local new_value
+        if [[ "$current_value" =~ : ]]; then
+          new_value=$(echo "$current_value" | sed "s/:${current_port}/:${api_port}/")
+        else
+          new_value="$api_port"
+        fi
+
+        # Use sed to update (macOS compatible)
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+          sed -i '' "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
+        else
+          sed -i "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
+        fi
+
+        [ "$quiet" != "true" ] && echo -e "  ${GREEN}Synced $env_path: port $current_port → $api_port${NC}"
+      fi
+    fi
+  done
+}
+
+# Show port usage across all workspaces
+show_ports() {
+  load_config
+  validate_config
+
+  echo -e "${CYAN}Port Usage Across Workspaces${NC}"
+  echo ""
+  printf "  %-20s %-8s %-8s %-20s\n" "WORKSPACE" "API" "APP" "STATUS"
+  echo "  ────────────────────────────────────────────────────────"
+
+  for ((i=1; i<=WORKSPACE_COUNT; i++)); do
+    local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$i"
+    if [ ! -d "$dir" ]; then
+      continue
+    fi
+
+    local default_api=$((API_PORT_BASE + i))
+    local default_app=$((APP_PORT_BASE + i))
+    local api_port=$(read_env_port "$dir" "api")
+    local app_port=$(read_env_port "$dir" "app")
+    [ -z "$api_port" ] && api_port="$default_api"
+    [ -z "$app_port" ] && app_port="$default_app"
+
+    # Check API port status
+    local api_status="free"
+    if lsof -i ":$api_port" &>/dev/null; then
+      local pid=$(lsof -t -i ":$api_port" 2>/dev/null | head -1)
+      local cwd=$(lsof -p "$pid" 2>/dev/null | grep cwd | awk '{print $NF}')
+      if [[ "$cwd" == *"$WORKSPACE_PREFIX-$i"* ]]; then
+        api_status="running"
+      elif [[ "$cwd" == *"$WORKSPACE_PREFIX-"* ]]; then
+        local other_ws=$(echo "$cwd" | grep -oE "${WORKSPACE_PREFIX}-[0-9]+" | sed "s/${WORKSPACE_PREFIX}-/ws/")
+        api_status="TAKEN:$other_ws"
+      else
+        api_status="in-use"
+      fi
+    fi
+
+    # Check APP port status
+    local app_status="free"
+    if lsof -i ":$app_port" &>/dev/null; then
+      local pid=$(lsof -t -i ":$app_port" 2>/dev/null | head -1)
+      local cwd=$(lsof -p "$pid" 2>/dev/null | grep cwd | awk '{print $NF}')
+      if [[ "$cwd" == *"$WORKSPACE_PREFIX-$i"* ]]; then
+        app_status="running"
+      elif [[ "$cwd" == *"$WORKSPACE_PREFIX-"* ]]; then
+        local other_ws=$(echo "$cwd" | grep -oE "${WORKSPACE_PREFIX}-[0-9]+" | sed "s/${WORKSPACE_PREFIX}-/ws/")
+        app_status="TAKEN:$other_ws"
+      else
+        app_status="in-use"
+      fi
+    fi
+
+    # Color code status
+    local api_display app_display
+    case "$api_status" in
+      "free") api_display="${YELLOW}free${NC}" ;;
+      "running") api_display="${GREEN}●${NC}" ;;
+      TAKEN:*) api_display="${RED}${api_status}${NC}" ;;
+      *) api_display="${YELLOW}busy${NC}" ;;
+    esac
+    case "$app_status" in
+      "free") app_display="${YELLOW}free${NC}" ;;
+      "running") app_display="${GREEN}●${NC}" ;;
+      TAKEN:*) app_display="${RED}${app_status}${NC}" ;;
+      *) app_display="${YELLOW}busy${NC}" ;;
+    esac
+
+    printf "  %-20s %-8s %-8s " "$WORKSPACE_PREFIX-$i" "$api_port" "$app_port"
+    echo -e "API: $api_display  APP: $app_display"
+  done
+  echo ""
+  echo -e "  Legend: ${GREEN}●${NC}=running  ${YELLOW}free${NC}=available  ${RED}TAKEN:wsN${NC}=conflict"
+}
+
+# =============================================================================
+# Git Operations
+# =============================================================================
+
+# Get the branch name for workspace N
+get_branch_name() {
+  local num=$1
+  echo "${BRANCH_PATTERN//\{N\}/$num}"
+}
+
+# Create workspace directory with git worktree
+create_workspace() {
+  local num=$1
+  local workspace_dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local branch_name=$(get_branch_name "$num")
+
+  if [ -d "$workspace_dir" ]; then
+    echo -e "  ${YELLOW}Workspace $num already exists${NC}"
+    return 0
+  fi
+
+  echo -e "${CYAN}Creating workspace $num...${NC}"
+
+  # Check if main repo exists
+  if [ ! -d "$MAIN_REPO" ]; then
+    error "Main repo not found at $MAIN_REPO"
+    exit 1
+  fi
+
+  # Ensure workspace base exists
+  mkdir -p "$WORKSPACE_BASE"
+
+  # Create git worktree
+  echo "  Creating git worktree..."
+  cd "$MAIN_REPO"
+  git fetch origin
+
+  # Check if branch exists
+  if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    git worktree add "$workspace_dir" "$branch_name"
+  else
+    git worktree add -b "$branch_name" "$workspace_dir" origin/main
+  fi
+
+  # Initialize submodules if configured
+  init_submodules "$workspace_dir"
+
+  # Sync .env files
+  local api_port=$((API_PORT_BASE + num))
+  sync_env_files "$workspace_dir" "$api_port"
+
+  success "Workspace $num created at $workspace_dir"
+}
+
+# Initialize submodules in workspace
+init_submodules() {
+  local dir=$1
+
+  local submodules_count=$(yq -r '.submodules | length // 0' "$CONFIG_FILE" 2>/dev/null)
+  [ "$submodules_count" = "0" ] && return
+
+  cd "$dir"
+
+  for ((i=0; i<submodules_count; i++)); do
+    local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    local reset_to=$(yq -r ".submodules[$i].reset_to" "$CONFIG_FILE" 2>/dev/null)
+
+    [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
+
+    echo "  Initializing submodule: $sub_path"
+    git submodule update --init "$sub_path" 2>/dev/null || true
+
+    if [ -n "$reset_to" ] && [ "$reset_to" != "null" ] && [ -d "$dir/$sub_path" ]; then
+      cd "$dir/$sub_path"
+      git fetch origin --quiet 2>/dev/null || true
+      git checkout main 2>/dev/null || git checkout -b main origin/main 2>/dev/null || true
+      git reset --hard "$reset_to" 2>/dev/null || true
+      cd "$dir"
+    fi
+  done
+}
+
+# Reset submodules to configured state
+reset_submodules() {
+  local dir=$1
+
+  local submodules_count=$(yq -r '.submodules | length // 0' "$CONFIG_FILE" 2>/dev/null)
+  [ "$submodules_count" = "0" ] && return
+
+  for ((i=0; i<submodules_count; i++)); do
+    local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    local reset_to=$(yq -r ".submodules[$i].reset_to" "$CONFIG_FILE" 2>/dev/null)
+
+    [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
+
+    if [ -d "$dir/$sub_path" ]; then
+      echo "  Resetting submodule: $sub_path"
+      cd "$dir/$sub_path"
+      git checkout -- . 2>/dev/null || true
+      git clean -fd 2>/dev/null || true
+      git checkout main 2>/dev/null || git checkout -b main origin/main 2>/dev/null || true
+      git fetch origin main --quiet 2>/dev/null || true
+      if [ -n "$reset_to" ] && [ "$reset_to" != "null" ]; then
+        git reset --hard "$reset_to"
+      else
+        git reset --hard origin/main
+      fi
+      cd "$dir"
+      echo -e "  ${GREEN}Submodule $sub_path reset${NC}"
+    fi
+  done
+}
+
+# =============================================================================
+# Workspace Operations
+# =============================================================================
+
+# List all workspaces
+list_workspaces() {
+  load_config
+
+  echo -e "${CYAN}Crabcode Workspaces${NC}"
+  echo ""
+
+  if ! config_exists; then
+    echo -e "${YELLOW}No config file found.${NC}"
+    echo ""
+    echo "Run 'crabcode init' to set up crabcode."
+    return
+  fi
+
+  validate_config
+
+  # Check if main session exists
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo -e "${GREEN}Active session: $SESSION_NAME${NC}"
+    echo "Windows:"
+    tmux list-windows -t "$SESSION_NAME" 2>/dev/null | while read -r line; do
+      echo "  $line"
+    done
+    echo ""
+  else
+    echo -e "${YELLOW}No active $SESSION_NAME session.${NC}"
+    echo ""
+  fi
+
+  echo -e "${YELLOW}Available workspaces:${NC}"
+  local found=false
+  for ((i=1; i<=WORKSPACE_COUNT; i++)); do
+    local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$i"
+    if [ -d "$dir" ]; then
+      found=true
+      local branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "unknown")
+      local api_port=$((API_PORT_BASE + i))
+      local env_port=$(read_env_port "$dir" "api")
+      [ -n "$env_port" ] && api_port="$env_port"
+
+      # Check if this workspace has a window in the session
+      local status="${YELLOW}[available]${NC}"
+      if tmux has-session -t "$SESSION_NAME" 2>/dev/null && \
+         tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^ws$i$"; then
+        status="${GREEN}[active]${NC}"
+      fi
+      echo -e "  $i: $WORKSPACE_PREFIX-$i ($branch) :$api_port $status"
+    fi
+  done
+
+  if [ "$found" = false ]; then
+    echo "  No workspaces found."
+    echo ""
+    echo "Run 'crabcode 1' to create and open workspace 1."
+  fi
+}
+
+# Open or create workspace
+open_workspace() {
+  local num=$1
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local window_name="ws$num"
+
+  # Create if doesn't exist
+  if [ ! -d "$dir" ]; then
+    create_workspace "$num"
+  fi
+
+  # Get port info
+  local port_info=$(get_workspace_ports "$num" "$dir")
+  local api_port=$(echo "$port_info" | cut -d: -f1)
+  local app_port=$(echo "$port_info" | cut -d: -f2)
+  local need_override=$(echo "$port_info" | cut -d: -f3)
+  local env_api_port=$(echo "$port_info" | cut -d: -f4)
+
+  # Check dependencies
+  check_and_setup_workspace "$dir" "$num"
+
+  # Build commands from config
+  local dev_cmd=$(get_pane_command "server")
+  local claude_cmd=$(get_pane_command "main")
+
+  # Port override if needed
+  if [ "$need_override" = "true" ]; then
+    dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
+    echo -e "${YELLOW}  Port $env_api_port in use, using $api_port instead${NC}"
+  fi
+
+  local port_msg="Using port $env_api_port"
+  [ "$need_override" = "true" ] && port_msg="Port $env_api_port in use → using $api_port"
+
+  # Check if session exists
+  if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    # Create new session
+    echo -e "${CYAN}Starting $SESSION_NAME session with workspace $num...${NC}"
+    echo "  Directory: $dir"
+    echo -e "  ${YELLOW}$port_msg${NC}"
+
+    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "new"
+    tmux attach -t "$SESSION_NAME"
+  else
+    # Session exists
+    if tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
+      echo -e "${CYAN}Switching to workspace $num...${NC}"
+      if [ -n "$TMUX" ]; then
+        tmux select-window -t "$SESSION_NAME:$window_name"
+      else
+        tmux attach -t "$SESSION_NAME" \; select-window -t "$window_name"
+      fi
+    else
+      echo -e "${CYAN}Adding workspace $num to session...${NC}"
+      echo "  Directory: $dir"
+      echo -e "  ${YELLOW}$port_msg${NC}"
+
+      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
+
+      if [ -n "$TMUX" ]; then
+        tmux select-window -t "$SESSION_NAME:$window_name"
+      else
+        tmux attach -t "$SESSION_NAME" \; select-window -t "$window_name"
+      fi
+    fi
+  fi
+}
+
+# Create the tmux layout for a workspace
+create_workspace_layout() {
+  local window_name=$1
+  local dir=$2
+  local dev_cmd=$3
+  local claude_cmd=$4
+  local port_msg=$5
+  local mode=$6  # "new" or "add"
+
+  if [ "$mode" = "new" ]; then
+    tmux new-session -d -s "$SESSION_NAME" -n "$window_name" -c "$dir"
+  else
+    tmux new-window -t "$SESSION_NAME" -n "$window_name" -c "$dir"
+  fi
+
+  # Create 3-pane layout:
+  # ┌─────────┬─────────┐
+  # │terminal │         │
+  # ├─────────┤ main    │
+  # │ server  │         │
+  # └─────────┴─────────┘
+  tmux split-window -h -t "$SESSION_NAME:$window_name" -c "$dir"
+  tmux select-pane -t "$SESSION_NAME:$window_name.1"
+  tmux split-window -v -t "$SESSION_NAME:$window_name" -c "$dir"
+
+  # Panes: .1=top-left (terminal), .2=bottom-left (server), .3=right (main/claude)
+  [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.2" "echo '$port_msg' && $dev_cmd" C-m
+  [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.3" "$claude_cmd" C-m
+  tmux select-pane -t "$SESSION_NAME:$window_name.3"
+}
+
+# Get command for a pane from config
+get_pane_command() {
+  local pane_name=$1
+  local panes_count=$(yq -r '.layout.panes | length // 0' "$CONFIG_FILE" 2>/dev/null)
+
+  for ((i=0; i<panes_count; i++)); do
+    local name=$(yq -r ".layout.panes[$i].name" "$CONFIG_FILE" 2>/dev/null)
+    if [ "$name" = "$pane_name" ]; then
+      yq -r ".layout.panes[$i].command // \"\"" "$CONFIG_FILE" 2>/dev/null
+      return
+    fi
+  done
+  echo ""
+}
+
+# Check and setup workspace (dependencies, .env sync)
+check_and_setup_workspace() {
+  local dir=$1
+  local num=$2
+
+  check_and_install_deps "$dir"
+
+  local api_port=$((API_PORT_BASE + num))
+  local env_port=$(read_env_port "$dir" "api")
+  [ -n "$env_port" ] && api_port="$env_port"
+
+  echo -e "${BLUE}Syncing .env files to API port $api_port...${NC}"
+  sync_env_files "$dir" "$api_port"
+}
+
+# Check if dependencies need installing
+check_and_install_deps() {
+  local dir=$1
+  local install_cmd=$(config_get "install_command" "")
+
+  [ -z "$install_cmd" ] && return
+
+  cd "$dir"
+
+  local marker="$dir/node_modules/.crabcode-installed"
+  local need_install="false"
+
+  if [ ! -d "$dir/node_modules" ]; then
+    need_install="true"
+  elif [ ! -f "$marker" ]; then
+    need_install="true"
+  elif [ -f "$dir/pnpm-lock.yaml" ] && [ "$dir/pnpm-lock.yaml" -nt "$marker" ]; then
+    need_install="true"
+  elif [ -f "$dir/package-lock.json" ] && [ "$dir/package-lock.json" -nt "$marker" ]; then
+    need_install="true"
+  elif [ -f "$dir/yarn.lock" ] && [ "$dir/yarn.lock" -nt "$marker" ]; then
+    need_install="true"
+  fi
+
+  if [ "$need_install" = "true" ]; then
+    echo -e "${YELLOW}Installing dependencies...${NC}"
+    if eval "$install_cmd"; then
+      touch "$marker"
+      echo -e "${GREEN}Dependencies installed${NC}"
+    else
+      error "Failed to install dependencies"
+      return 1
+    fi
+  fi
+
+  # Check submodule dependencies
+  local submodules_count=$(yq -r '.submodules | length // 0' "$CONFIG_FILE" 2>/dev/null)
+  for ((i=0; i<submodules_count; i++)); do
+    local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    local sub_install=$(yq -r ".submodules[$i].install_command // \"\"" "$CONFIG_FILE" 2>/dev/null)
+
+    [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
+    [ -z "$sub_install" ] || [ "$sub_install" = "null" ] && continue
+
+    local sub_dir="$dir/$sub_path"
+    if [ -d "$sub_dir" ]; then
+      local sub_marker="$sub_dir/node_modules/.crabcode-installed"
+      local sub_need_install="false"
+
+      if [ ! -d "$sub_dir/node_modules" ]; then
+        sub_need_install="true"
+      elif [ ! -f "$sub_marker" ]; then
+        sub_need_install="true"
+      fi
+
+      if [ "$sub_need_install" = "true" ]; then
+        echo -e "${YELLOW}Installing $sub_path dependencies...${NC}"
+        cd "$sub_dir"
+        if eval "$sub_install"; then
+          touch "$sub_marker"
+          echo -e "${GREEN}$sub_path dependencies installed${NC}"
+        else
+          warn "Failed to install $sub_path dependencies"
+        fi
+        cd "$dir"
+      fi
+    fi
+  done
+}
+
+# =============================================================================
+# Cleanup / Restart / Continue
+# =============================================================================
+
+cleanup_workspace() {
+  local num=$1
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local window_name="ws$num"
+
+  if [ ! -d "$dir" ]; then
+    error "Workspace $num does not exist at $dir"
+    exit 1
+  fi
+
+  echo -e "${YELLOW}Cleaning up workspace $num...${NC}"
+
+  # Kill the window in the session if it exists
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    tmux kill-window -t "$SESSION_NAME:$window_name" 2>/dev/null || true
+  fi
+
+  # Kill any running processes for this workspace
+  local kill_pattern=$(config_get "cleanup.kill_pattern" "")
+  if [ -n "$kill_pattern" ]; then
+    kill_pattern="${kill_pattern//\{N\}/$num}"
+    kill_pattern="${kill_pattern//\{PREFIX\}/$WORKSPACE_PREFIX}"
+    pkill -f "$kill_pattern" 2>/dev/null || true
+  fi
+
+  cd "$dir"
+
+  echo "  Fetching origin..."
+  git fetch origin
+
+  echo "  Resetting to origin/main..."
+  git checkout main 2>/dev/null || git checkout -b main origin/main
+  git reset --hard origin/main
+
+  echo "  Cleaning untracked files..."
+  local exclude_pattern=$(config_get "cleanup.preserve_files" ".env")
+  git clean -fd --exclude="$exclude_pattern"
+
+  reset_submodules "$dir"
+
+  success "Workspace $num cleaned and reset to origin/main"
+}
+
+restart_workspace() {
+  local num=$1
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local window_name="ws$num"
+  local branch_name=$(get_branch_name "$num")
+
+  if [ ! -d "$dir" ]; then
+    error "Workspace $num does not exist at $dir"
+    exit 1
+  fi
+
+  echo -e "${YELLOW}Restarting workspace $num...${NC}"
+
+  cd "$dir"
+
+  local current_branch=$(git branch --show-current)
+
+  echo "  Fetching origin..."
+  git fetch origin
+
+  if [ "$current_branch" != "$branch_name" ]; then
+    echo "  Switching from $current_branch to $branch_name..."
+    git checkout "$branch_name" 2>/dev/null || git checkout -b "$branch_name"
+  fi
+
+  echo "  Resetting $branch_name to origin/main content..."
+  git reset --hard origin/main
+
+  echo "  Cleaning untracked files..."
+  local exclude_pattern=$(config_get "cleanup.preserve_files" ".env")
+  git clean -fd --exclude="$exclude_pattern"
+
+  reset_submodules "$dir"
+
+  success "Git reset complete (on branch: $branch_name)"
+
+  # If we're in tmux and the window exists, restart the panes
+  if [ -n "$TMUX" ] && tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
+    local port_info=$(get_workspace_ports "$num" "$dir")
+    local api_port=$(echo "$port_info" | cut -d: -f1)
+    local app_port=$(echo "$port_info" | cut -d: -f2)
+    local need_override=$(echo "$port_info" | cut -d: -f3)
+
+    local dev_cmd=$(get_pane_command "server")
+    local claude_cmd=$(get_pane_command "main")
+
+    if [ "$need_override" = "true" ]; then
+      dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
+    fi
+
+    echo "  Clearing terminal pane..."
+    tmux send-keys -t "$SESSION_NAME:$window_name.1" "clear" C-m
+
+    echo "  Restarting server pane..."
+    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.2" -c "$dir"
+    sleep 0.5
+    [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.2" "clear && $dev_cmd" C-m
+
+    echo "  Restarting main pane..."
+    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.3" -c "$dir"
+    sleep 0.5
+    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.3" "clear && $claude_cmd" C-m
+
+    success "Workspace $num restarted!"
+  else
+    echo -e "${YELLOW}  Not in tmux session - run 'crabcode $num' to start${NC}"
+  fi
+}
+
+continue_workspace() {
+  local num=$1
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local window_name="ws$num"
+
+  if [ ! -d "$dir" ]; then
+    error "Workspace $num does not exist at $dir"
+    exit 1
+  fi
+
+  echo -e "${CYAN}Continuing workspace $num...${NC}"
+
+  local port_info=$(get_workspace_ports "$num" "$dir")
+  local api_port=$(echo "$port_info" | cut -d: -f1)
+  local app_port=$(echo "$port_info" | cut -d: -f2)
+  local need_override=$(echo "$port_info" | cut -d: -f3)
+
+  local dev_cmd=$(get_pane_command "server")
+  local claude_cmd=$(get_pane_command "main")
+
+  # Add --continue to claude command if it contains "claude"
+  if [[ "$claude_cmd" == *"claude"* ]]; then
+    claude_cmd="$claude_cmd --continue"
+  fi
+
+  if [ "$need_override" = "true" ]; then
+    dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
+  fi
+
+  if [ -n "$TMUX" ] && tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
+    echo "  Window exists, restarting with --continue..."
+
+    tmux send-keys -t "$SESSION_NAME:$window_name.2" C-c
+    sleep 0.3
+    [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.2" "$dev_cmd" C-m
+
+    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.3" -c "$dir"
+    sleep 0.5
+    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.3" "clear && $claude_cmd" C-m
+
+    success "Workspace $num continued with previous session"
+  else
+    echo "  Creating window with --continue..."
+    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "" "add"
+
+    if [ -n "$TMUX" ]; then
+      tmux select-window -t "$SESSION_NAME:$window_name"
+    fi
+
+    success "Workspace $num started with previous session"
+  fi
+}
+
+# Open workspace in separate terminal
+open_workspace_separate() {
+  local num=$1
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local session="$SESSION_NAME-$num"
+
+  # Create if doesn't exist
+  if [ ! -d "$dir" ]; then
+    create_workspace "$num"
+  fi
+
+  local port_info=$(get_workspace_ports "$num" "$dir")
+  local api_port=$(echo "$port_info" | cut -d: -f1)
+  local app_port=$(echo "$port_info" | cut -d: -f2)
+  local need_override=$(echo "$port_info" | cut -d: -f3)
+  local env_api_port=$(echo "$port_info" | cut -d: -f4)
+
+  echo -e "${CYAN}Starting workspace $num in separate window...${NC}"
+
+  check_and_setup_workspace "$dir" "$num"
+
+  local dev_cmd=$(get_pane_command "server")
+  local claude_cmd=$(get_pane_command "main")
+
+  if [ "$need_override" = "true" ]; then
+    dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
+    echo -e "${YELLOW}  Port $env_api_port in use, using $api_port instead${NC}"
+  fi
+
+  if tmux has-session -t "$session" 2>/dev/null; then
+    if command_exists osascript; then
+      osascript -e "tell application \"Terminal\" to do script \"tmux attach -t $session\""
+    else
+      echo "Open a new terminal and run: tmux attach -t $session"
+    fi
+  else
+    tmux new-session -d -s "$session" -n "dev" -c "$dir"
+    tmux split-window -h -t "$session" -c "$dir"
+    tmux select-pane -t "$session:dev.1"
+    tmux split-window -v -t "$session" -c "$dir"
+
+    [ -n "$dev_cmd" ] && tmux send-keys -t "$session:dev.2" "$dev_cmd" C-m
+    [ -n "$claude_cmd" ] && tmux send-keys -t "$session:dev.3" "$claude_cmd" C-m
+    tmux select-pane -t "$session:dev.3"
+
+    if command_exists osascript; then
+      osascript -e "tell application \"Terminal\" to do script \"tmux attach -t $session\""
+    else
+      echo "Open a new terminal and run: tmux attach -t $session"
+    fi
+  fi
+}
+
+# Detect workspace number from current directory
+detect_workspace() {
+  local cwd=$(pwd)
+  if [[ "$cwd" =~ $WORKSPACE_PREFIX-([0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+  else
+    echo ""
+  fi
+}
+
+# =============================================================================
+# WIP Management
+# =============================================================================
+
+get_wip_dir() {
+  local num=$1
+  echo "$WIP_BASE/$WORKSPACE_PREFIX-$num"
+}
+
+wip_save() {
+  local num=$1
+  local do_restart=$2
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local wip_dir=$(get_wip_dir "$num")
+  local timestamp=$(date +%Y%m%d-%H%M%S)
+  local branch_name=$(get_branch_name "$num")
+
+  if [ ! -d "$dir" ]; then
+    error "Workspace $num does not exist"
+    return 1
+  fi
+
+  echo -e "${CYAN}Saving WIP state for workspace $num...${NC}"
+
+  cd "$dir"
+  local diff=$(git diff HEAD 2>/dev/null || echo "")
+  local staged=$(git diff --cached HEAD 2>/dev/null || echo "")
+  local status=$(git status --porcelain 2>/dev/null || echo "")
+  local branch=$(git branch --show-current 2>/dev/null || echo "unknown")
+
+  git fetch origin main --quiet 2>/dev/null || true
+  local commits_ahead=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo "0")
+  local commit_log=""
+  if [ "$commits_ahead" -gt 0 ] 2>/dev/null; then
+    commit_log=$(git log --oneline origin/main..HEAD 2>/dev/null || echo "")
+  fi
+
+  # Collect submodule changes
+  local submodule_diffs=""
+  local submodules_count=$(yq -r '.submodules | length // 0' "$CONFIG_FILE" 2>/dev/null)
+  for ((i=0; i<submodules_count; i++)); do
+    local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
+
+    if [ -d "$dir/$sub_path" ]; then
+      cd "$dir/$sub_path"
+      local sub_diff=$(git diff HEAD 2>/dev/null || echo "")
+      local sub_staged=$(git diff --cached HEAD 2>/dev/null || echo "")
+      [ -n "$sub_diff" ] && submodule_diffs="$submodule_diffs$sub_diff"
+      [ -n "$sub_staged" ] && submodule_diffs="$submodule_diffs$sub_staged"
+      cd "$dir"
+    fi
+  done
+
+  # Check if there's anything to save
+  local has_changes="false"
+  if [ -n "$diff" ] || [ -n "$staged" ] || [ -n "$status" ] || [ -n "$submodule_diffs" ]; then
+    has_changes="true"
+  elif [ "$commits_ahead" -gt 0 ] 2>/dev/null; then
+    has_changes="true"
+  elif [ "$branch" != "$branch_name" ] && [ "$branch" != "main" ]; then
+    has_changes="true"
+  fi
+
+  if [ "$has_changes" = "false" ]; then
+    echo -e "${YELLOW}No changes to save.${NC}"
+    return 0
+  fi
+
+  local slug="wip-$(date +%H%M)"
+  local summary="Work in progress"
+
+  # Try to generate AI summary if claude is available
+  if command_exists claude; then
+    local all_diffs="$diff$staged$submodule_diffs"
+    local summary_json=$(generate_wip_summary "$all_diffs")
+    local parsed_slug=$(echo "$summary_json" | sed -n 's/.*"slug"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    local parsed_summary=$(echo "$summary_json" | sed -n 's/.*"summary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    [ -n "$parsed_slug" ] && slug="$parsed_slug"
+    [ -n "$parsed_summary" ] && summary="$parsed_summary"
+  fi
+
+  local wip_path="$wip_dir/$timestamp-$slug"
+  mkdir -p "$wip_path"
+
+  echo "  Saving patches..."
+  [ -n "$diff" ] && echo "$diff" > "$wip_path/main-unstaged.patch"
+  [ -n "$staged" ] && echo "$staged" > "$wip_path/main-staged.patch"
+  [ -n "$status" ] && echo "$status" > "$wip_path/main-status.txt"
+  [ -n "$commit_log" ] && echo "$commit_log" > "$wip_path/main-commits.txt"
+
+  # Save submodule patches
+  for ((i=0; i<submodules_count; i++)); do
+    local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
+
+    if [ -d "$dir/$sub_path" ]; then
+      cd "$dir/$sub_path"
+      local sub_diff=$(git diff HEAD 2>/dev/null || echo "")
+      local sub_staged=$(git diff --cached HEAD 2>/dev/null || echo "")
+      local sub_status=$(git status --porcelain 2>/dev/null || echo "")
+      local safe_name=$(echo "$sub_path" | tr '/' '-')
+      [ -n "$sub_diff" ] && echo "$sub_diff" > "$wip_path/${safe_name}-unstaged.patch"
+      [ -n "$sub_staged" ] && echo "$sub_staged" > "$wip_path/${safe_name}-staged.patch"
+      [ -n "$sub_status" ] && echo "$sub_status" > "$wip_path/${safe_name}-status.txt"
+      cd "$dir"
+    fi
+  done
+
+  cat > "$wip_path/metadata.json" << EOF
+{
+  "timestamp": "$timestamp",
+  "slug": "$slug",
+  "summary": "$summary",
+  "workspace": $num,
+  "branch": "$branch",
+  "commits_ahead": $commits_ahead,
+  "created_at": "$(date -Iseconds)"
+}
+EOF
+
+  success "WIP saved: $slug"
+  echo -e "   ${BLUE}$summary${NC}"
+  echo "   Location: $wip_path"
+
+  if [ "$do_restart" = "true" ]; then
+    echo ""
+    restart_workspace "$num"
+  fi
+}
+
+generate_wip_summary() {
+  local diff_content="$1"
+  local max_lines=100
+  local truncated_diff=$(echo "$diff_content" | head -n $max_lines)
+
+  if command_exists claude; then
+    local prompt="Based on this git diff, provide a JSON response with exactly this format (no markdown, just raw JSON):
+{\"slug\": \"short-kebab-case-name-max-30-chars\", \"summary\": \"One sentence describing the changes\"}
+
+Git diff:
+$truncated_diff"
+
+    local result=$(echo "$prompt" | timeout 30 claude --print 2>/dev/null || echo "")
+
+    if [ -n "$result" ]; then
+      local json=$(echo "$result" | grep -o '{[^}]*}' | head -1)
+      if [ -n "$json" ]; then
+        echo "$json"
+        return
+      fi
+    fi
+  fi
+
+  echo "{\"slug\": \"wip-$(date +%H%M)\", \"summary\": \"Work in progress\"}"
+}
+
+wip_list() {
+  local num=$1
+  local wip_dir=$(get_wip_dir "$num")
+
+  if [ ! -d "$wip_dir" ]; then
+    echo -e "${YELLOW}No WIP states saved for workspace $num${NC}"
+    return 0
+  fi
+
+  local wips=($(ls -1d "$wip_dir"/*/ 2>/dev/null | sort -r))
+
+  if [ ${#wips[@]} -eq 0 ]; then
+    echo -e "${YELLOW}No WIP states saved for workspace $num${NC}"
+    return 0
+  fi
+
+  echo -e "${CYAN}WIP States for Workspace $num${NC}"
+  echo ""
+
+  local i=1
+  for wip in "${wips[@]}"; do
+    local name=$(basename "$wip")
+    local metadata="$wip/metadata.json"
+
+    if [ -f "$metadata" ]; then
+      local summary=$(grep -o '"summary"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"summary"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      local created=$(grep -o '"created_at"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"created_at"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      local branch=$(grep -o '"branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+
+      echo -e "  ${GREEN}[$i]${NC} $name"
+      echo -e "      ${BLUE}$summary${NC}"
+      echo -e "      Branch: $branch | Created: $created"
+      echo ""
+    else
+      echo -e "  ${GREEN}[$i]${NC} $name (no metadata)"
+      echo ""
+    fi
+
+    ((i++))
+  done
+}
+
+wip_continue() {
+  local num=$1
+  local wip_dir=$(get_wip_dir "$num")
+
+  if [ ! -d "$wip_dir" ]; then
+    error "No WIP states found for workspace $num"
+    return 1
+  fi
+
+  local latest_wip=$(ls -1d "$wip_dir"/*/ 2>/dev/null | sort -r | head -1)
+
+  if [ -z "$latest_wip" ]; then
+    error "No WIP states found for workspace $num"
+    return 1
+  fi
+
+  local wip_name=$(basename "$latest_wip")
+  echo -e "${CYAN}Restoring WIP: $wip_name${NC}"
+
+  _restore_wip "$num" "$latest_wip"
+}
+
+wip_resume() {
+  local num=$1
+  local wip_dir=$(get_wip_dir "$num")
+
+  if [ ! -d "$wip_dir" ]; then
+    error "No WIP states found for workspace $num"
+    return 1
+  fi
+
+  local wips=($(ls -1d "$wip_dir"/*/ 2>/dev/null | sort -r))
+
+  if [ ${#wips[@]} -eq 0 ]; then
+    error "No WIP states found for workspace $num"
+    return 1
+  fi
+
+  echo -e "${CYAN}Select WIP to restore:${NC}"
+  echo ""
+
+  local i=1
+  for wip in "${wips[@]}"; do
+    local name=$(basename "$wip")
+    local metadata="$wip/metadata.json"
+    local summary=""
+
+    if [ -f "$metadata" ]; then
+      summary=$(grep -o '"summary"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"summary"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+    fi
+
+    echo -e "  ${GREEN}[$i]${NC} $name"
+    [ -n "$summary" ] && echo -e "      ${BLUE}$summary${NC}"
+    ((i++))
+  done
+
+  echo ""
+  echo -e "  ${YELLOW}[0]${NC} Cancel"
+  echo ""
+
+  read -p "Select WIP [1-${#wips[@]}]: " selection
+
+  if [ "$selection" = "0" ] || [ -z "$selection" ]; then
+    echo "Cancelled."
+    return 0
+  fi
+
+  if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt ${#wips[@]} ]; then
+    error "Invalid selection"
+    return 1
+  fi
+
+  local selected_wip="${wips[$((selection-1))]}"
+  local wip_name=$(basename "$selected_wip")
+
+  echo ""
+  echo -e "${CYAN}Restoring WIP: $wip_name${NC}"
+
+  _restore_wip "$num" "$selected_wip"
+}
+
+_restore_wip() {
+  local num=$1
+  local wip_path=$2
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local wip_name=$(basename "$wip_path")
+  local branch_name=$(get_branch_name "$num")
+
+  local metadata="$wip_path/metadata.json"
+  local saved_branch="$branch_name"
+  if [ -f "$metadata" ]; then
+    saved_branch=$(grep -o '"branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+  fi
+
+  cd "$dir"
+
+  local current_branch=$(git branch --show-current)
+  if [ "$current_branch" != "$saved_branch" ]; then
+    echo "  Switching to branch $saved_branch..."
+    git checkout "$saved_branch" 2>/dev/null || git checkout -b "$saved_branch"
+  fi
+
+  # Apply main patches
+  if [ -f "$wip_path/main-staged.patch" ] && [ -s "$wip_path/main-staged.patch" ]; then
+    echo "  Applying staged changes..."
+    git apply "$wip_path/main-staged.patch" 2>/dev/null && git add -A || echo "    (some hunks may have failed)"
+  fi
+
+  if [ -f "$wip_path/main-unstaged.patch" ] && [ -s "$wip_path/main-unstaged.patch" ]; then
+    echo "  Applying unstaged changes..."
+    git apply "$wip_path/main-unstaged.patch" 2>/dev/null || echo "    (some hunks may have failed)"
+  fi
+
+  # Apply submodule patches
+  local submodules_count=$(yq -r '.submodules | length // 0' "$CONFIG_FILE" 2>/dev/null)
+  for ((i=0; i<submodules_count; i++)); do
+    local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
+
+    if [ -d "$dir/$sub_path" ]; then
+      cd "$dir/$sub_path"
+      local safe_name=$(echo "$sub_path" | tr '/' '-')
+
+      if [ -f "$wip_path/${safe_name}-staged.patch" ] && [ -s "$wip_path/${safe_name}-staged.patch" ]; then
+        echo "  Applying $sub_path staged changes..."
+        git apply "$wip_path/${safe_name}-staged.patch" 2>/dev/null && git add -A || echo "    (some hunks may have failed)"
+      fi
+
+      if [ -f "$wip_path/${safe_name}-unstaged.patch" ] && [ -s "$wip_path/${safe_name}-unstaged.patch" ]; then
+        echo "  Applying $sub_path unstaged changes..."
+        git apply "$wip_path/${safe_name}-unstaged.patch" 2>/dev/null || echo "    (some hunks may have failed)"
+      fi
+
+      cd "$dir"
+    fi
+  done
+
+  success "WIP restored: $wip_name"
+  echo ""
+  echo "  Run 'crabcode $num' to open the workspace"
+  echo "  Or 'crabcode continue' to resume with --continue"
+}
+
+wip_delete() {
+  local num=$1
+  local wip_name=$2
+  local wip_dir=$(get_wip_dir "$num")
+
+  if [ -z "$wip_name" ]; then
+    error "Usage: crabcode wip delete <wip-name>"
+    return 1
+  fi
+
+  local wip_path="$wip_dir/$wip_name"
+
+  if [ ! -d "$wip_path" ]; then
+    wip_path=$(ls -1d "$wip_dir"/*"$wip_name"*/ 2>/dev/null | head -1)
+  fi
+
+  if [ ! -d "$wip_path" ]; then
+    error "WIP not found: $wip_name"
+    return 1
+  fi
+
+  local actual_name=$(basename "$wip_path")
+  read -p "Delete WIP '$actual_name'? [y/N]: " confirm
+
+  if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+    rm -rf "$wip_path"
+    success "Deleted: $actual_name"
+  else
+    echo "Cancelled."
+  fi
+}
+
+# =============================================================================
+# Init / Config / Doctor
+# =============================================================================
+
+show_init() {
+  echo -e "${CYAN}Crabcode Setup${NC}"
+  echo ""
+
+  if config_exists; then
+    echo -e "${YELLOW}Config already exists at $CONFIG_FILE${NC}"
+    read -p "Overwrite? [y/N]: " confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+      echo "Cancelled."
+      return
+    fi
+  fi
+
+  echo "Let's set up crabcode for your project."
+  echo ""
+
+  # Session name
+  read -p "Session name (default: crab): " session_name
+  session_name=${session_name:-crab}
+
+  # Main repo
+  read -p "Path to your main repo (e.g., ~/Dev/my-project): " main_repo
+  if [ -z "$main_repo" ]; then
+    error "Main repo path is required"
+    return 1
+  fi
+
+  # Workspace base
+  local default_base="$(dirname "$main_repo")/workspaces"
+  read -p "Workspace directory (default: $default_base): " workspace_base
+  workspace_base=${workspace_base:-$default_base}
+
+  # Workspace count
+  read -p "Number of workspaces (default: 5): " workspace_count
+  workspace_count=${workspace_count:-5}
+
+  # API port base
+  read -p "API port base (default: 3200, ws1=3201, ws2=3202...): " api_base
+  api_base=${api_base:-3200}
+
+  # App port base
+  read -p "App port base (default: 3000, ws1=3001, ws2=3002...): " app_base
+  app_base=${app_base:-3000}
+
+  # Install command
+  read -p "Install command (e.g., pnpm install, npm install, leave empty to skip): " install_cmd
+
+  # Server command
+  read -p "Server/dev command (e.g., pnpm dev, npm run dev): " server_cmd
+
+  # Main pane command
+  read -p "Main pane command (e.g., claude --dangerously-skip-permissions): " main_cmd
+
+  # Create config directory
+  mkdir -p "$CONFIG_DIR"
+
+  # Generate config file
+  cat > "$CONFIG_FILE" << EOF
+# Crabcode Configuration
+# Generated by 'crabcode init'
+
+session_name: $session_name
+workspace_base: $workspace_base
+main_repo: $main_repo
+
+workspaces:
+  count: $workspace_count
+  prefix: workspace
+  branch_pattern: workspace-{N}
+
+ports:
+  api_base: $api_base
+  app_base: $app_base
+EOF
+
+  if [ -n "$install_cmd" ]; then
+    cat >> "$CONFIG_FILE" << EOF
+
+install_command: $install_cmd
+EOF
+  fi
+
+  cat >> "$CONFIG_FILE" << EOF
+
+layout:
+  panes:
+    - name: terminal
+      command: ""
+    - name: server
+      command: $server_cmd
+    - name: main
+      command: $main_cmd
+
+# Uncomment and configure as needed:
+# env_sync:
+#   files:
+#     - path: server/.env
+#       port_var: API_PORT
+#     - path: app/.env
+#       port_var: VITE_API_PORT
+
+# submodules:
+#   - path: my-submodule
+#     reset_to: origin/main
+#     install_command: pnpm install
+
+# cleanup:
+#   preserve_files: ".env"
+#   kill_pattern: "{PREFIX}-{N}.*node"
+EOF
+
+  success "Config created at $CONFIG_FILE"
+  echo ""
+  echo "Next steps:"
+  echo "  1. Edit $CONFIG_FILE to customize further"
+  echo "  2. Run 'crabcode 1' to create and open workspace 1"
+  echo "  3. Run 'crabcode doctor' to verify your setup"
+}
+
+show_config() {
+  if ! config_exists; then
+    echo -e "${YELLOW}No config file found.${NC}"
+    echo "Run 'crabcode init' to create one."
+    return
+  fi
+
+  echo -e "${CYAN}Crabcode Configuration${NC}"
+  echo "File: $CONFIG_FILE"
+  echo ""
+  cat "$CONFIG_FILE"
+}
+
+show_doctor() {
+  echo -e "${CYAN}Crabcode Doctor${NC}"
+  echo ""
+
+  local issues=0
+
+  # Check yq
+  echo -n "  yq: "
+  if command_exists yq; then
+    echo -e "${GREEN}installed${NC}"
+  else
+    echo -e "${RED}not installed${NC}"
+    issues=$((issues + 1))
+  fi
+
+  # Check tmux
+  echo -n "  tmux: "
+  if command_exists tmux; then
+    echo -e "${GREEN}installed${NC}"
+  else
+    echo -e "${RED}not installed${NC}"
+    issues=$((issues + 1))
+  fi
+
+  # Check git
+  echo -n "  git: "
+  if command_exists git; then
+    echo -e "${GREEN}installed${NC}"
+  else
+    echo -e "${RED}not installed${NC}"
+    issues=$((issues + 1))
+  fi
+
+  # Check config
+  echo -n "  config: "
+  if config_exists; then
+    echo -e "${GREEN}exists${NC}"
+
+    # Validate config
+    load_config
+
+    echo -n "  session_name: "
+    if [ -n "$SESSION_NAME" ]; then
+      echo -e "${GREEN}$SESSION_NAME${NC}"
+    else
+      echo -e "${RED}not set${NC}"
+      issues=$((issues + 1))
+    fi
+
+    echo -n "  workspace_base: "
+    if [ -n "$WORKSPACE_BASE" ]; then
+      if [ -d "$WORKSPACE_BASE" ] || [ -d "$(dirname "$WORKSPACE_BASE")" ]; then
+        echo -e "${GREEN}$WORKSPACE_BASE${NC}"
+      else
+        echo -e "${YELLOW}$WORKSPACE_BASE (will be created)${NC}"
+      fi
+    else
+      echo -e "${RED}not set${NC}"
+      issues=$((issues + 1))
+    fi
+
+    echo -n "  main_repo: "
+    if [ -n "$MAIN_REPO" ]; then
+      if [ -d "$MAIN_REPO" ]; then
+        echo -e "${GREEN}$MAIN_REPO${NC}"
+      else
+        echo -e "${RED}$MAIN_REPO (not found)${NC}"
+        issues=$((issues + 1))
+      fi
+    else
+      echo -e "${RED}not set${NC}"
+      issues=$((issues + 1))
+    fi
+
+  else
+    echo -e "${YELLOW}not found${NC}"
+    echo ""
+    echo "Run 'crabcode init' to create a config file."
+    return
+  fi
+
+  echo ""
+  if [ $issues -eq 0 ]; then
+    success "All checks passed!"
+  else
+    echo -e "${RED}$issues issue(s) found${NC}"
+  fi
+}
+
+# =============================================================================
+# Help / Cheat Sheet
+# =============================================================================
+
+show_cheat() {
+  cat << 'EOF'
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                            CRABCODE CHEAT SHEET                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  COMMANDS                                                                     ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crabcode              List all workspaces                                    ║
+║  crabcode <N>          Open/create workspace N                                ║
+║  crabcode <N> --separate  Open workspace N in new terminal window             ║
+║  crabcode <N> cleanup  Kill window + reset to origin/main                     ║
+║  crabcode <N> restart  Reset git + restart panes in place                     ║
+║  crabcode <N> continue Resume with --continue flag                            ║
+║  crabcode restart      Auto-detect workspace + restart                        ║
+║  crabcode continue     Auto-detect + resume session                           ║
+║  crabcode cheat        Show this cheat sheet                                  ║
+║  crabcode ports        Show port usage across all workspaces                  ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  SETUP & CONFIG                                                               ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crabcode init         Interactive config setup                               ║
+║  crabcode config       Show current configuration                             ║
+║  crabcode doctor       Diagnose common issues                                 ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  WIP (WORK IN PROGRESS) MANAGEMENT                                            ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crabcode wip save           Save current changes                             ║
+║  crabcode wip save --restart Save changes then restart workspace              ║
+║  crabcode wip ls             List all saved WIP states                        ║
+║  crabcode wip --continue     Restore most recent WIP                          ║
+║  crabcode wip --resume       Interactive selection of WIP to restore          ║
+║  crabcode wip delete <name>  Delete a saved WIP state                         ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  TMUX KEYBINDINGS (Prefix = Ctrl+a)                                           ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  Option+1,2,3...       Switch to workspace 1, 2, 3...                         ║
+║  Ctrl+a  n             Next window                                            ║
+║  Ctrl+a  p             Previous window                                        ║
+║  Ctrl+a  d             Detach from session                                    ║
+║  Ctrl+a  z             Toggle pane zoom                                       ║
+║  Option+←/→/↑/↓        Navigate panes                                         ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+EOF
+}
+
+show_help() {
+  echo "crabcode v$VERSION - Workspace manager for multi-repo development"
+  echo ""
+  echo "Usage: crabcode [command] [arguments]"
+  echo ""
+  echo "Commands:"
+  echo "  (no args)         List all workspaces"
+  echo "  <N>               Open/create workspace N"
+  echo "  <N> --separate    Open workspace N in separate terminal window"
+  echo "  <N> cleanup       Kill window + reset to origin/main"
+  echo "  <N> restart       Reset git + restart panes in place"
+  echo "  <N> continue      Resume session with --continue flag"
+  echo "  restart           Auto-detect workspace from cwd + restart"
+  echo "  continue          Auto-detect workspace from cwd + resume"
+  echo "  init              Interactive config setup"
+  echo "  config            Show current configuration"
+  echo "  doctor            Diagnose common issues"
+  echo "  cheat             Show cheat sheet"
+  echo "  ports             Show port usage across workspaces"
+  echo "  wip               WIP management commands"
+  echo ""
+  echo "Config file: $CONFIG_FILE"
+}
+
+# =============================================================================
+# Main Entry Point
+# =============================================================================
+
+main() {
+  case "${1:-}" in
+    "")
+      list_workspaces
+      ;;
+    "init")
+      show_init
+      ;;
+    "config")
+      show_config
+      ;;
+    "doctor")
+      show_doctor
+      ;;
+    "cheat"|"help"|"-h"|"--help")
+      if [ "${1:-}" = "cheat" ]; then
+        show_cheat
+      else
+        show_help
+      fi
+      ;;
+    "ports")
+      show_ports
+      ;;
+    "restart"|"reset"|"refresh")
+      load_config
+      validate_config
+      num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Not in a workspace directory. Use: crabcode <N> restart"
+        exit 1
+      fi
+      restart_workspace "$num"
+      ;;
+    "continue"|"resume")
+      load_config
+      validate_config
+      num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Not in a workspace directory. Use: crabcode <N> continue"
+        exit 1
+      fi
+      continue_workspace "$num"
+      ;;
+    "cleanup"|"clean")
+      load_config
+      validate_config
+      num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Not in a workspace directory. Use: crabcode <N> cleanup"
+        exit 1
+      fi
+      cleanup_workspace "$num"
+      ;;
+    "wip")
+      load_config
+      validate_config
+      num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Not in a workspace directory. Use: crabcode <N> wip ..."
+        exit 1
+      fi
+      case "${2:-}" in
+        "save")
+          if [ "${3:-}" = "--restart" ] || [ "${3:-}" = "-r" ]; then
+            wip_save "$num" "true"
+          else
+            wip_save "$num" "false"
+          fi
+          ;;
+        "ls"|"list")
+          wip_list "$num"
+          ;;
+        "--continue"|"-c")
+          wip_continue "$num"
+          ;;
+        "--resume"|"-r"|"resume")
+          wip_resume "$num"
+          ;;
+        "delete"|"rm")
+          wip_delete "$num" "${3:-}"
+          ;;
+        *)
+          echo -e "${CYAN}WIP Commands:${NC}"
+          echo "  crabcode wip save [--restart]  Save current state"
+          echo "  crabcode wip ls                List saved WIP states"
+          echo "  crabcode wip --continue        Restore most recent WIP"
+          echo "  crabcode wip --resume          Interactive WIP selection"
+          echo "  crabcode wip delete <name>     Delete a WIP state"
+          ;;
+      esac
+      ;;
+    "--version"|"-v")
+      echo "crabcode v$VERSION"
+      ;;
+    *)
+      if [[ "$1" =~ ^[0-9]+$ ]]; then
+        load_config
+        validate_config
+        case "${2:-}" in
+          "cleanup"|"clean")
+            cleanup_workspace "$1"
+            ;;
+          "restart"|"reset"|"refresh")
+            restart_workspace "$1"
+            ;;
+          "continue"|"resume")
+            continue_workspace "$1"
+            ;;
+          "--separate"|"-s"|"separate")
+            open_workspace_separate "$1"
+            ;;
+          "wip")
+            case "${3:-}" in
+              "save")
+                if [ "${4:-}" = "--restart" ] || [ "${4:-}" = "-r" ]; then
+                  wip_save "$1" "true"
+                else
+                  wip_save "$1" "false"
+                fi
+                ;;
+              "ls"|"list")
+                wip_list "$1"
+                ;;
+              "--continue"|"-c")
+                wip_continue "$1"
+                ;;
+              "--resume"|"-r"|"resume")
+                wip_resume "$1"
+                ;;
+              "delete"|"rm")
+                wip_delete "$1" "${4:-}"
+                ;;
+              *)
+                echo -e "${CYAN}WIP Commands for workspace $1:${NC}"
+                echo "  crabcode $1 wip save [--restart]  Save current state"
+                echo "  crabcode $1 wip ls                List saved WIP states"
+                echo "  crabcode $1 wip --continue        Restore most recent WIP"
+                echo "  crabcode $1 wip --resume          Interactive WIP selection"
+                echo "  crabcode $1 wip delete <name>     Delete a WIP state"
+                ;;
+            esac
+            ;;
+          "")
+            open_workspace "$1"
+            ;;
+          *)
+            error "Unknown command: crabcode $1 $2"
+            echo "Did you mean one of these?"
+            echo "  crabcode $1 restart   Reset git + restart panes"
+            echo "  crabcode $1 continue  Resume session"
+            echo "  crabcode $1 cleanup   Kill window + reset"
+            echo "  crabcode $1 wip       WIP management"
+            exit 1
+            ;;
+        esac
+      else
+        error "Invalid argument '$1'"
+        echo "Usage: crabcode [number] [--separate|cleanup|restart|wip]"
+        echo "       crabcode restart   (auto-detect from current dir)"
+        echo "       crabcode wip       (WIP management)"
+        echo "       crabcode cheat"
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+main "$@"

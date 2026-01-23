@@ -1,0 +1,24 @@
+# Example: Minimal Configuration
+# Bare minimum config to get started
+
+session_name: dev
+workspace_base: ~/Dev/my-project/workspaces
+main_repo: ~/Dev/my-project
+
+workspaces:
+  count: 3
+  prefix: ws
+  branch_pattern: workspace-{N}
+
+ports:
+  api_base: 3000
+  app_base: 5000
+
+layout:
+  panes:
+    - name: terminal
+      command: ""
+    - name: server
+      command: ""
+    - name: main
+      command: ""

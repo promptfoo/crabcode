@@ -1,0 +1,27 @@
+# Ralph runtime files (keep config, ignore state)
+.ralph/logs/
+.ralph/.call_count
+.ralph/.last_reset
+.ralph/.circuit_breaker_state
+.ralph/.circuit_breaker_history
+.ralph/.exit_signals
+.ralph/.ralph_session
+.ralph/.ralph_session_history
+.ralph/progress.json
+.ralph/status.json
+.ralph/docs/generated/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Test artifacts
+test-output/
+coverage/

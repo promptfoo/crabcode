@@ -1,0 +1,33 @@
+# Test environment for crabcode
+FROM ubuntu:22.04
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    bash \
+    curl \
+    git \
+    tmux \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install yq
+RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.35.1/yq_linux_amd64 -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq
+
+# Create test user
+RUN useradd -m -s /bin/bash testuser
+USER testuser
+WORKDIR /home/testuser
+
+# Set up test git repo
+RUN mkdir -p ~/test-repo && cd ~/test-repo && git init && \
+    git config user.email "test@test.com" && \
+    git config user.name "Test User" && \
+    echo "# Test" > README.md && \
+    git add . && git commit -m "Initial commit"
+
+# Copy crabcode
+COPY --chown=testuser:testuser src/crabcode /usr/local/bin/crabcode
+RUN chmod +x /usr/local/bin/crabcode
+
+# Default command
+CMD ["bash"]
