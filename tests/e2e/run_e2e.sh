@@ -316,6 +316,44 @@ fi
 echo ""
 
 # =============================================================================
+# Test 9: Shared Volume
+# =============================================================================
+
+log "Testing shared volume..."
+
+# Create shared volume directory
+mkdir -p ~/.crabcode/shared
+
+# Create a test file in the shared volume
+echo "shared test content" > ~/.crabcode/shared/test-shared.txt
+
+# Add shared_volume config to our test config
+cat >> ~/.crabcode/config.yaml << 'EOF'
+
+shared_volume:
+  enabled: true
+  path: ~/.crabcode/shared
+  link_as: .local
+EOF
+
+# Create a fake .local directory with content in workspace 1 to test migration
+cd ~/Dev-Promptfoo/subfolder/cloud-workspace-1
+mkdir -p .local
+echo "workspace-local-file" > .local/ws1-notes.txt
+
+# Run crabcode doctor to trigger setup (uses check functions)
+run_test "crabcode shared command" \
+  "crabcode shared" \
+  "Shared Volume|shared"
+
+# Test that the shared command shows the path
+run_test "crabcode shared shows path" \
+  "crabcode shared | grep -E '~/.crabcode/shared|shared'" \
+  "shared"
+
+echo ""
+
+# =============================================================================
 # Summary
 # =============================================================================
 

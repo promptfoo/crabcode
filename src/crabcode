@@ -180,6 +180,11 @@ load_config() {
   API_PORT_BASE=$(config_get "ports.api_base" "3200")
   APP_PORT_BASE=$(config_get "ports.app_base" "3000")
 
+  # Shared volume settings
+  SHARED_VOLUME_PATH=$(expand_path "$(config_get "shared_volume.path" "$CONFIG_DIR/shared")")
+  SHARED_VOLUME_LINK=$(config_get "shared_volume.link_as" ".local")
+  SHARED_VOLUME_ENABLED=$(config_get "shared_volume.enabled" "true")
+
   _config_loaded=true
 }
 
@@ -442,6 +447,9 @@ create_workspace() {
   # Initialize submodules if configured
   init_submodules "$workspace_dir"
 
+  # Setup shared volume
+  setup_shared_volume "$workspace_dir"
+
   # Sync .env files
   local api_port=$((API_PORT_BASE + num))
   sync_env_files "$workspace_dir" "$api_port"
@@ -506,6 +514,99 @@ reset_submodules() {
       echo -e "  ${GREEN}Submodule $sub_path reset${NC}"
     fi
   done
+}
+
+# =============================================================================
+# Shared Volume Management
+# =============================================================================
+
+# Setup shared volume symlink in a workspace
+# Handles migration of existing .local directories
+setup_shared_volume() {
+  local dir=$1
+
+  # Skip if shared volume is disabled
+  if [ "$SHARED_VOLUME_ENABLED" != "true" ]; then
+    return 0
+  fi
+
+  local link_name="$SHARED_VOLUME_LINK"
+  local link_path="$dir/$link_name"
+  local shared_path="$SHARED_VOLUME_PATH"
+
+  # Create shared volume directory if it doesn't exist
+  if [ ! -d "$shared_path" ]; then
+    echo "  Creating shared volume at $shared_path..."
+    mkdir -p "$shared_path"
+  fi
+
+  # Check current state of link path
+  if [ -L "$link_path" ]; then
+    # Already a symlink - check if it points to the right place
+    local current_target=$(readlink "$link_path")
+    if [ "$current_target" = "$shared_path" ]; then
+      # Already correctly linked
+      return 0
+    else
+      # Wrong target - remove and recreate
+      echo "  Updating $link_name symlink..."
+      rm "$link_path"
+    fi
+  elif [ -d "$link_path" ]; then
+    # Existing directory - migrate contents to shared volume
+    echo "  Migrating existing $link_name to shared volume..."
+
+    # Copy contents to shared volume (preserving existing shared files)
+    if [ "$(ls -A "$link_path" 2>/dev/null)" ]; then
+      # Directory has contents - migrate them
+      local migrated=0
+      for item in "$link_path"/*; do
+        [ ! -e "$item" ] && continue
+        local basename=$(basename "$item")
+        if [ -e "$shared_path/$basename" ]; then
+          # File/dir exists in shared - create workspace-specific backup
+          local ws_name=$(basename "$dir")
+          local backup_name="${basename}.from-${ws_name}"
+          echo "    $basename exists in shared, saving as $backup_name"
+          mv "$item" "$shared_path/$backup_name"
+        else
+          echo "    Moving $basename to shared volume"
+          mv "$item" "$shared_path/"
+        fi
+        migrated=$((migrated + 1))
+      done
+      if [ $migrated -gt 0 ]; then
+        echo -e "  ${GREEN}Migrated $migrated item(s) to shared volume${NC}"
+      fi
+    fi
+
+    # Remove the now-empty directory
+    rmdir "$link_path" 2>/dev/null || rm -rf "$link_path"
+  elif [ -e "$link_path" ]; then
+    # Some other file type - backup and remove
+    echo "  Backing up existing $link_name..."
+    mv "$link_path" "$link_path.backup.$(date +%Y%m%d%H%M%S)"
+  fi
+
+  # Create symlink
+  ln -s "$shared_path" "$link_path"
+  echo -e "  ${GREEN}Linked $link_name → $shared_path${NC}"
+
+  # Add to .gitignore if not already there
+  local gitignore="$dir/.gitignore"
+  if [ -f "$gitignore" ]; then
+    if ! grep -q "^${link_name}$" "$gitignore" 2>/dev/null; then
+      echo "" >> "$gitignore"
+      echo "# Shared local volume (crabcode)" >> "$gitignore"
+      echo "$link_name" >> "$gitignore"
+      echo "  Added $link_name to .gitignore"
+    fi
+  else
+    # Create .gitignore with the link name
+    echo "# Shared local volume (crabcode)" > "$gitignore"
+    echo "$link_name" >> "$gitignore"
+    echo "  Created .gitignore with $link_name"
+  fi
 }
 
 # =============================================================================
@@ -683,12 +784,15 @@ get_pane_command() {
   echo ""
 }
 
-# Check and setup workspace (dependencies, .env sync)
+# Check and setup workspace (dependencies, .env sync, shared volume)
 check_and_setup_workspace() {
   local dir=$1
   local num=$2
 
   check_and_install_deps "$dir"
+
+  # Setup shared volume (handles migration if needed)
+  setup_shared_volume "$dir"
 
   local api_port=$((API_PORT_BASE + num))
   local env_port=$(read_env_port "$dir" "api")
@@ -1471,6 +1575,13 @@ layout:
     - name: main
       command: $main_cmd
 
+# Shared volume: a directory symlinked as .local in each workspace
+# Great for local experiments, PR reviews, research that survives resets
+# shared_volume:
+#   enabled: true
+#   path: ~/.crabcode/shared    # Where the shared files are stored
+#   link_as: .local             # Symlink name in each workspace
+
 # Uncomment and configure as needed:
 # env_sync:
 #   files:
@@ -1591,6 +1702,18 @@ show_doctor() {
     return
   fi
 
+  # Check shared volume
+  echo -n "  shared_volume: "
+  if [ "$SHARED_VOLUME_ENABLED" = "true" ]; then
+    if [ -d "$SHARED_VOLUME_PATH" ]; then
+      echo -e "${GREEN}$SHARED_VOLUME_PATH${NC}"
+    else
+      echo -e "${YELLOW}$SHARED_VOLUME_PATH (will be created)${NC}"
+    fi
+  else
+    echo -e "${YELLOW}disabled${NC}"
+  fi
+
   echo ""
   if [ $issues -eq 0 ]; then
     success "All checks passed!"
@@ -1602,6 +1725,36 @@ show_doctor() {
 # =============================================================================
 # Help / Cheat Sheet
 # =============================================================================
+
+# Show shared volume info
+show_shared() {
+  load_config
+
+  if [ "$SHARED_VOLUME_ENABLED" != "true" ]; then
+    echo -e "${YELLOW}Shared volume is disabled.${NC}"
+    echo ""
+    echo "To enable, add to your config:"
+    echo "  shared_volume:"
+    echo "    enabled: true"
+    return
+  fi
+
+  echo -e "${CYAN}Shared Volume${NC}"
+  echo ""
+  echo -e "  Path: ${GREEN}$SHARED_VOLUME_PATH${NC}"
+  echo -e "  Link name: $SHARED_VOLUME_LINK"
+  echo ""
+
+  if [ -d "$SHARED_VOLUME_PATH" ]; then
+    local count=$(ls -1 "$SHARED_VOLUME_PATH" 2>/dev/null | wc -l | tr -d ' ')
+    echo "  Contents ($count items):"
+    ls -la "$SHARED_VOLUME_PATH" 2>/dev/null | tail -n +2 | while read -r line; do
+      echo "    $line"
+    done
+  else
+    echo -e "  ${YELLOW}Not yet created (will be created on first workspace open)${NC}"
+  fi
+}
 
 show_cheat() {
   cat << 'EOF'
@@ -1621,6 +1774,7 @@ show_cheat() {
 ║  crabcode continue     Auto-detect + resume session                           ║
 ║  crabcode cheat        Show this cheat sheet                                  ║
 ║  crabcode ports        Show port usage across all workspaces                  ║
+║  crabcode shared       Show shared volume path and contents                   ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
@@ -1675,6 +1829,7 @@ show_help() {
   echo "  doctor            Diagnose common issues"
   echo "  cheat             Show cheat sheet"
   echo "  ports             Show port usage across workspaces"
+  echo "  shared            Show shared volume path and contents"
   echo "  wip               WIP management commands"
   echo ""
   echo "Config file: $CONFIG_FILE"
@@ -1707,6 +1862,9 @@ main() {
       ;;
     "ports")
       show_ports
+      ;;
+    "shared")
+      show_shared
       ;;
     "restart"|"reset"|"refresh")
       load_config

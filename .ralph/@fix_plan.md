@@ -1,7 +1,11 @@
 # Fix Plan
 
 ## In Progress
-- [ ] Run tests and verify all functionality works
+
+
+## Recently Completed
+- [x] Add shared volume feature - symlink `.local` in each workspace to central shared directory (24/24 e2e tests pass)
+- [x] Run tests and verify all functionality works (10/10 tests pass)
 
 ## Completed
 - [x] Build crabcode - generic tmux workspace manager

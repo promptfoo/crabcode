@@ -42,3 +42,10 @@ submodules:
 cleanup:
   preserve_files: ".env"
   kill_pattern: "cloud-workspace-{N}.*pnpm|cloud-workspace-{N}.*node"
+
+# Shared volume: persists across workspace resets
+# Great for local experiments, PR reviews, research notes
+shared_volume:
+  enabled: true
+  path: ~/.crabcode/shared    # Central location for shared files
+  link_as: .local             # Symlink name in each workspace
