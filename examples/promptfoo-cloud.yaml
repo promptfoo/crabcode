@@ -49,3 +49,21 @@ shared_volume:
   enabled: true
   path: ~/.crabcode/shared    # Central location for shared files
   link_as: .local             # Symlink name in each workspace
+
+# Toolkit configuration (for crab tk share)
+toolkit:
+  share:
+    # Default upload service: transfer.sh, 0x0.st
+    service: transfer.sh
+
+  # Slack integration (optional)
+  # Get token: https://api.slack.com/apps → Create App → OAuth & Permissions
+  # Required scopes: files:write, channels:read
+  # slack:
+  #   token: xoxb-your-bot-token
+  #   default_channel: "#dev"
+
+  # Email via mutt/msmtp (optional)
+  # Configure msmtp: ~/.msmtprc
+  # email:
+  #   from: you@example.com

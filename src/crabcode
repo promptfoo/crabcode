@@ -1536,6 +1536,543 @@ wip_delete() {
 }
 
 # =============================================================================
+# Toolkit - Share
+# =============================================================================
+
+# Default exclude patterns for sharing (dependencies, build artifacts)
+SHARE_EXCLUDE_PATTERNS=(
+  "node_modules"
+  ".git"
+  "vendor"
+  "venv"
+  ".venv"
+  "__pycache__"
+  ".pytest_cache"
+  "dist"
+  "build"
+  ".next"
+  ".nuxt"
+  "target"
+  ".cache"
+  "*.pyc"
+  "*.pyo"
+  ".DS_Store"
+  "Thumbs.db"
+)
+
+# Create a clean archive of a path, excluding dependencies
+# Returns the path to the created archive
+tk_create_archive() {
+  local source_path="$1"
+  local include_git="${2:-false}"
+  local include_deps="${3:-false}"
+
+  local abs_path=$(cd "$source_path" 2>/dev/null && pwd || echo "$source_path")
+  local base_name=$(basename "$abs_path")
+  local timestamp=$(date +%Y%m%d-%H%M%S)
+  local archive_name="${base_name}-${timestamp}.zip"
+  local archive_path="/tmp/$archive_name"
+
+  echo -e "${CYAN}Creating archive...${NC}"
+
+  # Build exclude arguments for zip
+  local exclude_args=""
+
+  if [ "$include_deps" != "true" ]; then
+    for pattern in "${SHARE_EXCLUDE_PATTERNS[@]}"; do
+      # Skip .git if include_git is true
+      if [ "$pattern" = ".git" ] && [ "$include_git" = "true" ]; then
+        continue
+      fi
+      exclude_args="$exclude_args -x '$base_name/$pattern/*' -x '$base_name/$pattern'"
+    done
+    echo "  Excluding: dependencies and build artifacts"
+  fi
+
+  if [ "$include_git" != "true" ]; then
+    echo "  Excluding: .git/"
+  fi
+
+  # Check if it's a git repo and respect .gitignore
+  if [ -d "$abs_path/.git" ] || [ -f "$abs_path/.git" ]; then
+    # Get list of gitignored files and add to excludes
+    local gitignored=$(cd "$abs_path" && git ls-files --others --ignored --exclude-standard 2>/dev/null | head -100)
+    if [ -n "$gitignored" ]; then
+      echo "  Respecting: .gitignore patterns"
+    fi
+  fi
+
+  # Create the archive
+  cd "$(dirname "$abs_path")"
+
+  # Use eval to properly handle the exclude args
+  if eval "zip -rq '$archive_path' '$base_name' $exclude_args" 2>/dev/null; then
+    local size=$(du -h "$archive_path" | cut -f1)
+    echo -e "  ${GREEN}Created: $archive_name ($size)${NC}"
+    echo "$archive_path"
+  else
+    error "Failed to create archive"
+    return 1
+  fi
+}
+
+# Upload to transfer.sh
+tk_upload_transfersh() {
+  local file_path="$1"
+  local filename=$(basename "$file_path")
+
+  echo -e "${CYAN}Uploading to transfer.sh...${NC}"
+
+  local url=$(curl --progress-bar --upload-file "$file_path" "https://transfer.sh/$filename" 2>/dev/null)
+
+  if [ -n "$url" ]; then
+    echo ""
+    echo -e "${GREEN}Upload complete!${NC}"
+    echo ""
+    echo -e "  URL: ${BOLD}$url${NC}"
+    echo "  Expires: 14 days"
+    echo ""
+
+    # Copy to clipboard if possible
+    if command_exists pbcopy; then
+      echo -n "$url" | pbcopy
+      echo "  (Copied to clipboard)"
+    elif command_exists xclip; then
+      echo -n "$url" | xclip -selection clipboard
+      echo "  (Copied to clipboard)"
+    fi
+
+    return 0
+  else
+    error "Upload failed"
+    return 1
+  fi
+}
+
+# Upload to 0x0.st (alternative service)
+tk_upload_0x0() {
+  local file_path="$1"
+
+  echo -e "${CYAN}Uploading to 0x0.st...${NC}"
+
+  local url=$(curl -s -F "file=@$file_path" https://0x0.st 2>/dev/null)
+
+  if [ -n "$url" ] && [[ "$url" == http* ]]; then
+    echo ""
+    echo -e "${GREEN}Upload complete!${NC}"
+    echo ""
+    echo -e "  URL: ${BOLD}$url${NC}"
+    echo ""
+
+    # Copy to clipboard
+    if command_exists pbcopy; then
+      echo -n "$url" | pbcopy
+      echo "  (Copied to clipboard)"
+    fi
+
+    return 0
+  else
+    error "Upload failed"
+    return 1
+  fi
+}
+
+# Transfer via SSH/rsync
+tk_transfer_ssh() {
+  local file_path="$1"
+  local destination="$2"
+
+  # Parse destination: user@host:/path or just host
+  local user_host="${destination%%:*}"
+  local remote_path="${destination#*:}"
+
+  # Default to ~/Downloads if no path specified
+  if [ "$remote_path" = "$destination" ]; then
+    remote_path="~/Downloads/"
+  fi
+
+  echo -e "${CYAN}Transferring via SSH...${NC}"
+  echo "  Destination: $user_host:$remote_path"
+
+  if command_exists rsync; then
+    rsync -avz --progress "$file_path" "$user_host:$remote_path"
+  else
+    scp "$file_path" "$user_host:$remote_path"
+  fi
+
+  if [ $? -eq 0 ]; then
+    echo ""
+    success "Transfer complete!"
+  else
+    error "Transfer failed"
+    return 1
+  fi
+}
+
+# Upload to Slack
+tk_upload_slack() {
+  local file_path="$1"
+  local channel="${2:-}"
+
+  # Get Slack config
+  local slack_token=$(config_get "toolkit.slack.token" "")
+  local default_channel=$(config_get "toolkit.slack.default_channel" "")
+
+  [ -z "$channel" ] && channel="$default_channel"
+
+  # Check for slackcat first (easier)
+  if command_exists slackcat; then
+    echo -e "${CYAN}Uploading to Slack via slackcat...${NC}"
+    slackcat --channel "$channel" "$file_path"
+    return $?
+  fi
+
+  # Otherwise use curl with Slack API
+  if [ -z "$slack_token" ]; then
+    error "Slack not configured. Add to ~/.crabcode/config.yaml:"
+    echo ""
+    echo "toolkit:"
+    echo "  slack:"
+    echo "    token: xoxb-your-bot-token"
+    echo "    default_channel: \"#general\""
+    echo ""
+    echo "Or install slackcat: https://github.com/bcicen/slackcat"
+    return 1
+  fi
+
+  if [ -z "$channel" ]; then
+    error "No Slack channel specified. Use --slack=#channel or set default_channel in config"
+    return 1
+  fi
+
+  # Remove # prefix if present
+  channel="${channel#\#}"
+
+  echo -e "${CYAN}Uploading to Slack #$channel...${NC}"
+
+  # Step 1: Get upload URL (new Slack API)
+  local filename=$(basename "$file_path")
+  local filesize=$(stat -f%z "$file_path" 2>/dev/null || stat -c%s "$file_path" 2>/dev/null)
+
+  local upload_response=$(curl -s -X POST "https://slack.com/api/files.getUploadURLExternal" \
+    -H "Authorization: Bearer $slack_token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "filename=$filename&length=$filesize")
+
+  local upload_url=$(echo "$upload_response" | grep -o '"upload_url":"[^"]*"' | cut -d'"' -f4)
+  local file_id=$(echo "$upload_response" | grep -o '"file_id":"[^"]*"' | cut -d'"' -f4)
+
+  if [ -z "$upload_url" ] || [ -z "$file_id" ]; then
+    error "Failed to get upload URL from Slack"
+    echo "Response: $upload_response"
+    return 1
+  fi
+
+  # Step 2: Upload file
+  curl -s -X POST "$upload_url" \
+    -H "Authorization: Bearer $slack_token" \
+    -F "file=@$file_path"
+
+  # Step 3: Complete upload and share to channel
+  # First get channel ID
+  local channels_response=$(curl -s -X GET "https://slack.com/api/conversations.list?types=public_channel,private_channel" \
+    -H "Authorization: Bearer $slack_token")
+
+  local channel_id=$(echo "$channels_response" | grep -o "\"id\":\"[^\"]*\",\"name\":\"$channel\"" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
+
+  if [ -z "$channel_id" ]; then
+    error "Could not find channel #$channel"
+    return 1
+  fi
+
+  local complete_response=$(curl -s -X POST "https://slack.com/api/files.completeUploadExternal" \
+    -H "Authorization: Bearer $slack_token" \
+    -H "Content-Type: application/json" \
+    -d "{\"files\":[{\"id\":\"$file_id\"}],\"channel_id\":\"$channel_id\"}")
+
+  if echo "$complete_response" | grep -q '"ok":true'; then
+    echo ""
+    success "Uploaded to Slack #$channel!"
+  else
+    error "Failed to complete Slack upload"
+    echo "Response: $complete_response"
+    return 1
+  fi
+}
+
+# Send via email
+tk_send_email() {
+  local file_path="$1"
+  local recipient="$2"
+  local filename=$(basename "$file_path")
+
+  echo -e "${CYAN}Sending via email...${NC}"
+
+  # Check for mutt (preferred for attachments)
+  if command_exists mutt; then
+    local subject="Shared file: $filename"
+    local body="Shared via crabcode toolkit.\n\nFile: $filename"
+
+    echo -e "$body" | mutt -s "$subject" -a "$file_path" -- "$recipient"
+
+    if [ $? -eq 0 ]; then
+      success "Email sent to $recipient"
+      return 0
+    else
+      error "Failed to send email"
+      return 1
+    fi
+  fi
+
+  # macOS: Open in Mail.app
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "Opening Mail.app..."
+    open -a Mail "$file_path"
+    echo -e "${YELLOW}Please compose and send the email manually${NC}"
+    return 0
+  fi
+
+  # Fallback: check for mail/mailx
+  if command_exists mail; then
+    echo -e "${YELLOW}Note: mail command may not support attachments on all systems${NC}"
+    echo "File: $file_path"
+    echo ""
+    echo "To send manually:"
+    echo "  echo 'See attached' | mutt -s 'Shared file' -a '$file_path' -- $recipient"
+    return 1
+  fi
+
+  error "No email client found. Install mutt:"
+  echo "  brew install mutt    # macOS"
+  echo "  apt install mutt     # Linux"
+  return 1
+}
+
+# Start local HTTP server
+tk_serve() {
+  local source_path="$1"
+  local port="${2:-8080}"
+
+  local abs_path=$(cd "$source_path" 2>/dev/null && pwd || echo "$source_path")
+
+  # If it's a directory, create an archive first
+  local file_to_serve="$abs_path"
+  if [ -d "$abs_path" ]; then
+    file_to_serve=$(tk_create_archive "$abs_path")
+  fi
+
+  local filename=$(basename "$file_to_serve")
+  local filesize=$(du -h "$file_to_serve" | cut -f1)
+
+  # Get local IP
+  local local_ip=""
+  if command_exists ipconfig; then
+    # macOS
+    local_ip=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null)
+  else
+    # Linux
+    local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  fi
+
+  echo ""
+  echo -e "${CYAN}Starting file server...${NC}"
+  echo ""
+  echo -e "  File:    ${BOLD}$filename${NC} ($filesize)"
+  echo -e "  Local:   ${BOLD}http://localhost:$port/$filename${NC}"
+  [ -n "$local_ip" ] && echo -e "  Network: ${BOLD}http://$local_ip:$port/$filename${NC}"
+  echo ""
+
+  # Generate QR code if qrencode is available
+  if command_exists qrencode && [ -n "$local_ip" ]; then
+    echo "QR Code (scan to download):"
+    qrencode -t ANSI256 "http://$local_ip:$port/$filename" 2>/dev/null || true
+    echo ""
+  fi
+
+  echo -e "${YELLOW}Press Ctrl+C to stop${NC}"
+  echo ""
+
+  # Create a temporary directory for serving
+  local serve_dir=$(mktemp -d)
+  cp "$file_to_serve" "$serve_dir/"
+
+  # Use Python's built-in HTTP server
+  if command_exists python3; then
+    cd "$serve_dir" && python3 -m http.server "$port"
+  elif command_exists python; then
+    cd "$serve_dir" && python -m SimpleHTTPServer "$port"
+  else
+    error "Python not found. Cannot start HTTP server."
+    rm -rf "$serve_dir"
+    return 1
+  fi
+
+  # Cleanup
+  rm -rf "$serve_dir"
+}
+
+# Main toolkit share handler
+handle_tk_share() {
+  local path="${1:-.}"
+  shift || true
+
+  # Parse options
+  local to=""
+  local include_git="false"
+  local include_deps="false"
+  local zip_only="false"
+  local serve_mode="false"
+  local port="8080"
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --to)
+        to="$2"
+        shift 2
+        ;;
+      --to=*)
+        to="${1#--to=}"
+        shift
+        ;;
+      --include-git)
+        include_git="true"
+        shift
+        ;;
+      --include-deps)
+        include_deps="true"
+        shift
+        ;;
+      --zip)
+        zip_only="true"
+        shift
+        ;;
+      --serve)
+        serve_mode="true"
+        shift
+        ;;
+      --port)
+        port="$2"
+        shift 2
+        ;;
+      --port=*)
+        port="${1#--port=}"
+        shift
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  # Validate path
+  if [ ! -e "$path" ]; then
+    error "Path not found: $path"
+    return 1
+  fi
+
+  # Handle serve mode
+  if [ "$serve_mode" = "true" ]; then
+    tk_serve "$path" "$port"
+    return $?
+  fi
+
+  # Create archive if it's a directory
+  local file_to_share="$path"
+  if [ -d "$path" ]; then
+    file_to_share=$(tk_create_archive "$path" "$include_git" "$include_deps")
+    if [ $? -ne 0 ]; then
+      return 1
+    fi
+  fi
+
+  # Just create zip
+  if [ "$zip_only" = "true" ]; then
+    local filename=$(basename "$file_to_share")
+    local dest="./$filename"
+    cp "$file_to_share" "$dest"
+    success "Archive created: $dest"
+    return 0
+  fi
+
+  # Handle different destinations
+  case "$to" in
+    ""|url|transfer.sh)
+      tk_upload_transfersh "$file_to_share"
+      ;;
+    0x0|0x0.st)
+      tk_upload_0x0 "$file_to_share"
+      ;;
+    ssh:*|scp:*|rsync:*)
+      local dest="${to#*:}"
+      tk_transfer_ssh "$file_to_share" "$dest"
+      ;;
+    slack:*|slack)
+      local channel="${to#slack:}"
+      [ "$channel" = "slack" ] && channel=""
+      tk_upload_slack "$file_to_share" "$channel"
+      ;;
+    email:*|mail:*)
+      local recipient="${to#*:}"
+      tk_send_email "$file_to_share" "$recipient"
+      ;;
+    *)
+      # Assume it's an SSH destination if it contains @
+      if [[ "$to" == *"@"* ]]; then
+        tk_transfer_ssh "$file_to_share" "$to"
+      else
+        error "Unknown destination: $to"
+        echo "Use: --to=url, --to=ssh:user@host, --to=slack:#channel, --to=email:addr"
+        return 1
+      fi
+      ;;
+  esac
+}
+
+# Show toolkit help
+show_tk_help() {
+  echo -e "${CYAN}Toolkit Commands${NC}"
+  echo ""
+  echo "Share files and folders:"
+  echo "  crab tk share <path>                    Upload and get temp URL"
+  echo "  crab tk share <path> --to ssh:user@host Transfer via SSH"
+  echo "  crab tk share <path> --to slack:#chan   Upload to Slack"
+  echo "  crab tk share <path> --to email:addr    Send via email"
+  echo "  crab tk share <path> --zip              Just create archive"
+  echo "  crab tk share <path> --serve            Start local HTTP server"
+  echo ""
+  echo "Options:"
+  echo "  --include-git     Include .git folder"
+  echo "  --include-deps    Include dependencies (node_modules, etc.)"
+  echo "  --port=8080       Port for --serve mode"
+  echo ""
+  echo "For git repos, automatically excludes:"
+  echo "  node_modules, vendor, venv, dist, build, .git, etc."
+}
+
+# Handle toolkit subcommand
+handle_tk_command() {
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    "share")
+      handle_tk_share "$@"
+      ;;
+    "serve")
+      tk_serve "${1:-.}" "${2:-8080}"
+      ;;
+    ""|"help"|"-h"|"--help")
+      show_tk_help
+      ;;
+    *)
+      error "Unknown toolkit command: $cmd"
+      echo "Run 'crab tk help' for usage"
+      return 1
+      ;;
+  esac
+}
+
+# =============================================================================
 # Init / Config / Doctor
 # =============================================================================
 
@@ -1851,6 +2388,20 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  TOOLKIT COMMANDS (crab tk ...)                                               ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab tk share <path>              Upload → temp URL (transfer.sh)            ║
+║  crab tk share <path> --to ssh:... Transfer via SSH/rsync                     ║
+║  crab tk share <path> --to slack:# Upload to Slack channel                    ║
+║  crab tk share <path> --to email:@ Send via email                             ║
+║  crab tk share <path> --serve      Start local HTTP server + QR code          ║
+║  crab tk share <path> --zip        Just create local archive                  ║
+║                                                                               ║
+║  Options: --include-git, --include-deps, --port=8080                          ║
+║  Auto-excludes: node_modules, .git, vendor, venv, dist, build...              ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  OTHER COMMANDS                                                               ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab init             Interactive config setup                               ║
@@ -1900,6 +2451,12 @@ show_help() {
   echo "  wip ls            List saved WIP states"
   echo "  wip --continue    Restore most recent WIP"
   echo "  wip --resume      Interactive WIP selection"
+  echo ""
+  echo "Toolkit Commands:"
+  echo "  tk share <path>   Share file/folder (temp URL)"
+  echo "  tk share --to ssh:user@host   SSH transfer"
+  echo "  tk share --to slack:#channel  Slack upload"
+  echo "  tk share --serve  Local HTTP server"
   echo ""
   echo "Other Commands:"
   echo "  init              Interactive config setup"
@@ -2035,6 +2592,9 @@ main() {
       ;;
     "shared")
       show_shared
+      ;;
+    "tk"|"toolkit")
+      handle_tk_command "${@:2}"
       ;;
     "new"|"create")
       # Shorthand: crab new -> crab ws new

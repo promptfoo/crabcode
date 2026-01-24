@@ -383,6 +383,42 @@ run_test "crabcode shared shows path" \
 echo ""
 
 # =============================================================================
+# Test 11: Toolkit Share
+# =============================================================================
+
+log "Testing toolkit share..."
+
+# Test toolkit help
+run_test "crab tk help" \
+  "crabcode tk help" \
+  "share|Share|Toolkit"
+
+# Test archive creation (without actually uploading)
+cd ~/Dev-Promptfoo/subfolder/cloud-workspace-1
+
+# Create a test file
+mkdir -p test-share-dir
+echo "test content" > test-share-dir/file.txt
+echo "another file" > test-share-dir/another.txt
+
+# Test --zip flag (just creates archive, no upload)
+run_test "crab tk share --zip creates archive" \
+  "crabcode tk share test-share-dir --zip 2>&1 | head -5" \
+  "Creating archive|Excluding"
+
+# Verify node_modules would be excluded
+mkdir -p test-share-dir/node_modules
+echo "dep" > test-share-dir/node_modules/package.json
+run_test "crab tk share excludes node_modules" \
+  "crabcode tk share test-share-dir --zip 2>&1" \
+  "Excluding.*dependencies"
+
+# Cleanup test dir
+rm -rf test-share-dir
+
+echo ""
+
+# =============================================================================
 # Summary
 # =============================================================================
 
