@@ -435,13 +435,16 @@ create_workspace() {
   # Create git worktree
   echo "  Creating git worktree..."
   cd "$MAIN_REPO"
-  git fetch origin
+  git fetch origin 2>/dev/null || true  # May fail if no remote
 
   # Check if branch exists
   if git show-ref --verify --quiet "refs/heads/$branch_name"; then
     git worktree add "$workspace_dir" "$branch_name"
-  else
+  elif git show-ref --verify --quiet "refs/remotes/origin/main"; then
     git worktree add -b "$branch_name" "$workspace_dir" origin/main
+  else
+    # No origin/main - use current HEAD
+    git worktree add -b "$branch_name" "$workspace_dir" HEAD
   fi
 
   # Initialize submodules if configured
@@ -644,7 +647,19 @@ list_workspaces() {
 
   echo -e "${YELLOW}Available workspaces:${NC}"
   local found=false
-  for ((i=1; i<=WORKSPACE_COUNT; i++)); do
+
+  # Find all existing workspaces (may be more than configured count)
+  local max_ws=$WORKSPACE_COUNT
+  for dir in "$WORKSPACE_BASE/$WORKSPACE_PREFIX-"*; do
+    if [ -d "$dir" ]; then
+      local num=$(basename "$dir" | sed "s/${WORKSPACE_PREFIX}-//")
+      if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -gt "$max_ws" ]; then
+        max_ws=$num
+      fi
+    fi
+  done
+
+  for ((i=1; i<=max_ws; i++)); do
     local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$i"
     if [ -d "$dir" ]; then
       found=true
@@ -666,7 +681,7 @@ list_workspaces() {
   if [ "$found" = false ]; then
     echo "  No workspaces found."
     echo ""
-    echo "Run 'crabcode 1' to create and open workspace 1."
+    echo "Run 'crabcode new' or 'crabcode 1' to create a workspace."
   fi
 }
 
@@ -1102,6 +1117,37 @@ detect_workspace() {
   else
     echo ""
   fi
+}
+
+# Find the next available workspace number
+find_next_workspace() {
+  local num=1
+  while true; do
+    local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+    if [ ! -d "$dir" ]; then
+      echo "$num"
+      return
+    fi
+    num=$((num + 1))
+    # Safety limit
+    if [ $num -gt 100 ]; then
+      echo ""
+      return
+    fi
+  done
+}
+
+# Create a new workspace with the next available number
+create_new_workspace() {
+  local next_num=$(find_next_workspace)
+
+  if [ -z "$next_num" ]; then
+    error "Could not find an available workspace number"
+    exit 1
+  fi
+
+  echo -e "${CYAN}Creating new workspace $next_num...${NC}"
+  open_workspace "$next_num"
 }
 
 # =============================================================================
@@ -1765,6 +1811,7 @@ show_cheat() {
 ║  COMMANDS                                                                     ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crabcode              List all workspaces                                    ║
+║  crabcode new          Create next available workspace                        ║
 ║  crabcode <N>          Open/create workspace N                                ║
 ║  crabcode <N> --separate  Open workspace N in new terminal window             ║
 ║  crabcode <N> cleanup  Kill window + reset to origin/main                     ║
@@ -1817,6 +1864,7 @@ show_help() {
   echo ""
   echo "Commands:"
   echo "  (no args)         List all workspaces"
+  echo "  new               Create next available workspace"
   echo "  <N>               Open/create workspace N"
   echo "  <N> --separate    Open workspace N in separate terminal window"
   echo "  <N> cleanup       Kill window + reset to origin/main"
@@ -1865,6 +1913,11 @@ main() {
       ;;
     "shared")
       show_shared
+      ;;
+    "new"|"create")
+      load_config
+      validate_config
+      create_new_workspace
       ;;
     "restart"|"reset"|"refresh")
       load_config

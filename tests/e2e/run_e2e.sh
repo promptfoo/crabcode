@@ -261,11 +261,11 @@ run_test "Invalid workspace number" \
   "crabcode abc 2>&1" \
   "Invalid|Error|number"
 
-# Note: crabcode currently attempts to create any workspace number.
-# This test checks that it at least fails for invalid numbers.
-run_test "Workspace out of range" \
-  "crabcode 99 2>&1" \
-  "Error|fatal|Invalid|failed"
+# crabcode allows creating any workspace number - no artificial limit
+# Just verify high numbers work (though tmux will fail in Docker)
+run_test "High workspace number accepted" \
+  "crabcode 99 2>&1 | head -5" \
+  "Creating|workspace"
 
 echo ""
 
@@ -316,7 +316,32 @@ fi
 echo ""
 
 # =============================================================================
-# Test 9: Shared Volume
+# Test 9: New Workspace Command
+# =============================================================================
+
+log "Testing crabcode new command..."
+
+# Since workspace 1 and 2 exist, new should create 3
+# Note: tmux operations will fail in Docker, but workspace should still be created
+cd ~/Dev-Promptfoo/promptfoo-cloud
+output=$(crabcode new 2>&1 || true)
+if echo "$output" | grep -qE "workspace 3|Creating.*3"; then
+  pass "crabcode new finds next available (workspace 3)"
+else
+  fail "crabcode new did not find next workspace" "$output"
+fi
+
+# Verify workspace 3 was created (even if tmux failed afterward)
+if [ -d ~/Dev-Promptfoo/subfolder/cloud-workspace-3 ]; then
+  pass "crabcode new created workspace 3"
+else
+  fail "crabcode new did not create workspace 3" "Directory doesn't exist"
+fi
+
+echo ""
+
+# =============================================================================
+# Test 10: Shared Volume
 # =============================================================================
 
 log "Testing shared volume..."
