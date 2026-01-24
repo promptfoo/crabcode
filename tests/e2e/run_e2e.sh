@@ -126,14 +126,18 @@ log "Testing basic commands..."
 
 run_test "crabcode --help" \
   "crabcode --help" \
-  "crabcode"
+  "crab"
 
 run_test "crabcode --version" \
   "crabcode --version" \
   "[0-9]+\.[0-9]+\.[0-9]+"
 
-run_test "crabcode cheat" \
-  "crabcode cheat" \
+run_test "crab alias works" \
+  "crab --version" \
+  "[0-9]+\.[0-9]+\.[0-9]+"
+
+run_test "crab cheat" \
+  "crab cheat" \
   "CHEAT SHEET"
 
 run_test "crabcode config" \
@@ -157,8 +161,8 @@ echo ""
 log "Testing workspace creation..."
 
 # List workspaces (should show none or prompt to create)
-run_test "crabcode (list empty)" \
-  "crabcode" \
+run_test "crab ws (list empty)" \
+  "crabcode ws" \
   "workspace|Workspace|No workspaces|create"
 
 # Create workspace 1 without tmux (should create worktree)
@@ -202,8 +206,8 @@ echo ""
 
 log "Testing workspace listing..."
 
-run_test "crabcode (list workspaces)" \
-  "crabcode" \
+run_test "crab ws (list workspaces)" \
+  "crabcode ws" \
   "cloud-workspace-1|cloud-workspace-2|workspace"
 
 echo ""
@@ -324,18 +328,18 @@ log "Testing crabcode new command..."
 # Since workspace 1 and 2 exist, new should create 3
 # Note: tmux operations will fail in Docker, but workspace should still be created
 cd ~/Dev-Promptfoo/promptfoo-cloud
-output=$(crabcode new 2>&1 || true)
+output=$(crabcode ws new 2>&1 || true)
 if echo "$output" | grep -qE "workspace 3|Creating.*3"; then
-  pass "crabcode new finds next available (workspace 3)"
+  pass "crab ws new finds next available (workspace 3)"
 else
-  fail "crabcode new did not find next workspace" "$output"
+  fail "crab ws new did not find next workspace" "$output"
 fi
 
 # Verify workspace 3 was created (even if tmux failed afterward)
 if [ -d ~/Dev-Promptfoo/subfolder/cloud-workspace-3 ]; then
-  pass "crabcode new created workspace 3"
+  pass "crab ws new created workspace 3"
 else
-  fail "crabcode new did not create workspace 3" "Directory doesn't exist"
+  fail "crab ws new did not create workspace 3" "Directory doesn't exist"
 fi
 
 echo ""

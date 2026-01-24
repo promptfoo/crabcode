@@ -59,9 +59,12 @@ RUN cd ~/Dev-Promptfoo/promptfoo-cloud && \
 # Create workspace directory
 RUN mkdir -p ~/Dev-Promptfoo/subfolder
 
-# Copy crabcode
-COPY --chown=testuser:testuser src/crabcode /usr/local/bin/crabcode
-RUN chmod +x /usr/local/bin/crabcode
+# Copy crabcode and create crab alias (need root for /usr/local/bin)
+USER root
+COPY src/crabcode /usr/local/bin/crabcode
+RUN chmod +x /usr/local/bin/crabcode && \
+    ln -s /usr/local/bin/crabcode /usr/local/bin/crab
+USER testuser
 
 # Copy test script
 COPY --chown=testuser:testuser tests/e2e/run_e2e.sh /home/testuser/run_e2e.sh

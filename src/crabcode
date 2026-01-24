@@ -1109,14 +1109,25 @@ open_workspace_separate() {
   fi
 }
 
-# Detect workspace number from current directory
+# Detect workspace number from current directory or tmux window
 detect_workspace() {
+  # First try: current directory
   local cwd=$(pwd)
   if [[ "$cwd" =~ $WORKSPACE_PREFIX-([0-9]+) ]]; then
     echo "${BASH_REMATCH[1]}"
-  else
-    echo ""
+    return
   fi
+
+  # Second try: tmux window name (ws1, ws2, etc.)
+  if [ -n "$TMUX" ]; then
+    local window_name=$(tmux display-message -p '#{window_name}' 2>/dev/null)
+    if [[ "$window_name" =~ ^ws([0-9]+)$ ]]; then
+      echo "${BASH_REMATCH[1]}"
+      return
+    fi
+  fi
+
+  echo ""
 }
 
 # Find the next available workspace number
@@ -1806,49 +1817,55 @@ show_cheat() {
   cat << 'EOF'
 ╔═══════════════════════════════════════════════════════════════════════════════╗
 ║                            CRABCODE CHEAT SHEET                               ║
+║                                                                               ║
+║  Tip: Use 'crab' as shorthand for 'crabcode'                                  ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
-║  COMMANDS                                                                     ║
+║  WORKSPACE COMMANDS (crab ws ...)                                             ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
-║  crabcode              List all workspaces                                    ║
-║  crabcode new          Create next available workspace                        ║
-║  crabcode <N>          Open/create workspace N                                ║
-║  crabcode <N> --separate  Open workspace N in new terminal window             ║
-║  crabcode <N> cleanup  Kill window + reset to origin/main                     ║
-║  crabcode <N> restart  Reset git + restart panes in place                     ║
-║  crabcode <N> continue Resume with --continue flag                            ║
-║  crabcode restart      Auto-detect workspace + restart                        ║
-║  crabcode continue     Auto-detect + resume session                           ║
-║  crabcode cheat        Show this cheat sheet                                  ║
-║  crabcode ports        Show port usage across all workspaces                  ║
-║  crabcode shared       Show shared volume path and contents                   ║
+║  crab ws               List all workspaces                                    ║
+║  crab ws new           Create next available workspace                        ║
+║  crab ws <N>           Open/create workspace N                                ║
+║  crab ws <N> --separate   Open in new terminal window                         ║
+║  crab ws <N> restart   Reset git + restart panes                              ║
+║  crab ws <N> cleanup   Kill window + reset to origin/main                     ║
+║  crab ws <N> continue  Resume with --continue flag                            ║
 ║                                                                               ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║  SETUP & CONFIG                                                               ║
+║  SHORTCUTS (auto-detect workspace from cwd or tmux window)                    ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
-║  crabcode init         Interactive config setup                               ║
-║  crabcode config       Show current configuration                             ║
-║  crabcode doctor       Diagnose common issues                                 ║
+║  crab restart          Restart current workspace                              ║
+║  crab cleanup          Cleanup current workspace                              ║
+║  crab continue         Continue current workspace                             ║
+║  crab <N>              Shorthand for: crab ws <N>                             ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
-║  WIP (WORK IN PROGRESS) MANAGEMENT                                            ║
+║  WIP COMMANDS (crab wip ...)                                                  ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
-║  crabcode wip save           Save current changes                             ║
-║  crabcode wip save --restart Save changes then restart workspace              ║
-║  crabcode wip ls             List all saved WIP states                        ║
-║  crabcode wip --continue     Restore most recent WIP                          ║
-║  crabcode wip --resume       Interactive selection of WIP to restore          ║
-║  crabcode wip delete <name>  Delete a saved WIP state                         ║
+║  crab wip save              Save current changes                              ║
+║  crab wip save --restart    Save then restart workspace                       ║
+║  crab wip ls                List saved WIP states                             ║
+║  crab wip --continue        Restore most recent WIP                           ║
+║  crab wip --resume          Interactive WIP selection                         ║
+║  crab wip delete <name>     Delete a saved WIP state                          ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  OTHER COMMANDS                                                               ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab init             Interactive config setup                               ║
+║  crab config           Show current configuration                             ║
+║  crab doctor           Diagnose common issues                                 ║
+║  crab ports            Show port usage across workspaces                      ║
+║  crab shared           Show shared volume info                                ║
+║  crab cheat            Show this cheat sheet                                  ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
 ║  TMUX KEYBINDINGS (Prefix = Ctrl+a)                                           ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  Option+1,2,3...       Switch to workspace 1, 2, 3...                         ║
-║  Ctrl+a  n             Next window                                            ║
-║  Ctrl+a  p             Previous window                                        ║
+║  Ctrl+a  n/p           Next/previous window                                   ║
 ║  Ctrl+a  d             Detach from session                                    ║
 ║  Ctrl+a  z             Toggle pane zoom                                       ║
 ║  Option+←/→/↑/↓        Navigate panes                                         ║
@@ -1860,27 +1877,127 @@ EOF
 show_help() {
   echo "crabcode v$VERSION - Workspace manager for multi-repo development"
   echo ""
-  echo "Usage: crabcode [command] [arguments]"
+  echo "Usage: crab [command] [arguments]"
+  echo "       (crab is an alias for crabcode)"
   echo ""
-  echo "Commands:"
-  echo "  (no args)         List all workspaces"
-  echo "  new               Create next available workspace"
-  echo "  <N>               Open/create workspace N"
-  echo "  <N> --separate    Open workspace N in separate terminal window"
-  echo "  <N> cleanup       Kill window + reset to origin/main"
-  echo "  <N> restart       Reset git + restart panes in place"
-  echo "  <N> continue      Resume session with --continue flag"
-  echo "  restart           Auto-detect workspace from cwd + restart"
-  echo "  continue          Auto-detect workspace from cwd + resume"
+  echo "Workspace Commands:"
+  echo "  ws                List all workspaces"
+  echo "  ws new            Create next available workspace"
+  echo "  ws <N>            Open/create workspace N"
+  echo "  ws <N> restart    Reset git + restart panes"
+  echo "  ws <N> cleanup    Kill window + reset to origin/main"
+  echo "  ws <N> continue   Resume with --continue flag"
+  echo "  ws <N> --separate Open in new terminal window"
+  echo ""
+  echo "Shortcuts (auto-detect workspace):"
+  echo "  <N>               Shorthand for: ws <N>"
+  echo "  restart           Restart current workspace"
+  echo "  cleanup           Cleanup current workspace"
+  echo "  continue          Continue current workspace"
+  echo ""
+  echo "WIP Commands:"
+  echo "  wip save          Save current changes"
+  echo "  wip ls            List saved WIP states"
+  echo "  wip --continue    Restore most recent WIP"
+  echo "  wip --resume      Interactive WIP selection"
+  echo ""
+  echo "Other Commands:"
   echo "  init              Interactive config setup"
-  echo "  config            Show current configuration"
-  echo "  doctor            Diagnose common issues"
+  echo "  config            Show configuration"
+  echo "  doctor            Diagnose issues"
+  echo "  ports             Show port usage"
+  echo "  shared            Show shared volume info"
   echo "  cheat             Show cheat sheet"
-  echo "  ports             Show port usage across workspaces"
-  echo "  shared            Show shared volume path and contents"
-  echo "  wip               WIP management commands"
   echo ""
-  echo "Config file: $CONFIG_FILE"
+  echo "Config: $CONFIG_FILE"
+}
+
+# =============================================================================
+# Workspace Subcommand Handler
+# =============================================================================
+
+handle_ws_command() {
+  local arg="${1:-}"
+  shift || true
+
+  case "$arg" in
+    ""|"ls"|"list")
+      list_workspaces
+      ;;
+    "new"|"create")
+      create_new_workspace
+      ;;
+    *)
+      if [[ "$arg" =~ ^[0-9]+$ ]]; then
+        local num="$arg"
+        case "${1:-}" in
+          "cleanup"|"clean")
+            cleanup_workspace "$num"
+            ;;
+          "restart"|"reset"|"refresh")
+            restart_workspace "$num"
+            ;;
+          "continue"|"resume")
+            continue_workspace "$num"
+            ;;
+          "--separate"|"-s"|"separate")
+            open_workspace_separate "$num"
+            ;;
+          "wip")
+            handle_wip_for_workspace "$num" "${@:2}"
+            ;;
+          "")
+            open_workspace "$num"
+            ;;
+          *)
+            error "Unknown command: crab ws $num $1"
+            echo "Try: crab ws $num restart|cleanup|continue|wip"
+            exit 1
+            ;;
+        esac
+      else
+        error "Invalid workspace argument: $arg"
+        echo "Usage: crab ws <N> or crab ws new"
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+# Handle WIP commands for a specific workspace
+handle_wip_for_workspace() {
+  local num=$1
+  shift || true
+
+  case "${1:-}" in
+    "save")
+      if [ "${2:-}" = "--restart" ] || [ "${2:-}" = "-r" ]; then
+        wip_save "$num" "true"
+      else
+        wip_save "$num" "false"
+      fi
+      ;;
+    "ls"|"list")
+      wip_list "$num"
+      ;;
+    "--continue"|"-c")
+      wip_continue "$num"
+      ;;
+    "--resume"|"-r"|"resume")
+      wip_resume "$num"
+      ;;
+    "delete"|"rm")
+      wip_delete "$num" "${2:-}"
+      ;;
+    *)
+      echo -e "${CYAN}WIP Commands for workspace $num:${NC}"
+      echo "  crab ws $num wip save [--restart]"
+      echo "  crab ws $num wip ls"
+      echo "  crab ws $num wip --continue"
+      echo "  crab ws $num wip --resume"
+      echo "  crab ws $num wip delete <name>"
+      ;;
+  esac
 }
 
 # =============================================================================
@@ -1891,6 +2008,11 @@ main() {
   case "${1:-}" in
     "")
       list_workspaces
+      ;;
+    "ws"|"workspace")
+      load_config
+      validate_config
+      handle_ws_command "${@:2}"
       ;;
     "init")
       show_init
@@ -1915,6 +2037,7 @@ main() {
       show_shared
       ;;
     "new"|"create")
+      # Shorthand: crab new -> crab ws new
       load_config
       validate_config
       create_new_workspace
@@ -1924,7 +2047,7 @@ main() {
       validate_config
       num=$(detect_workspace)
       if [ -z "$num" ]; then
-        error "Not in a workspace directory. Use: crabcode <N> restart"
+        error "Cannot detect workspace. Run from a workspace dir or use: crab ws <N> restart"
         exit 1
       fi
       restart_workspace "$num"
@@ -1934,7 +2057,7 @@ main() {
       validate_config
       num=$(detect_workspace)
       if [ -z "$num" ]; then
-        error "Not in a workspace directory. Use: crabcode <N> continue"
+        error "Cannot detect workspace. Run from a workspace dir or use: crab ws <N> continue"
         exit 1
       fi
       continue_workspace "$num"
@@ -1944,7 +2067,7 @@ main() {
       validate_config
       num=$(detect_workspace)
       if [ -z "$num" ]; then
-        error "Not in a workspace directory. Use: crabcode <N> cleanup"
+        error "Cannot detect workspace. Run from a workspace dir or use: crab ws <N> cleanup"
         exit 1
       fi
       cleanup_workspace "$num"
@@ -1991,72 +2114,19 @@ main() {
       echo "crabcode v$VERSION"
       ;;
     *)
+      # Backwards compatibility: crab <N> -> crab ws <N>
       if [[ "$1" =~ ^[0-9]+$ ]]; then
         load_config
         validate_config
-        case "${2:-}" in
-          "cleanup"|"clean")
-            cleanup_workspace "$1"
-            ;;
-          "restart"|"reset"|"refresh")
-            restart_workspace "$1"
-            ;;
-          "continue"|"resume")
-            continue_workspace "$1"
-            ;;
-          "--separate"|"-s"|"separate")
-            open_workspace_separate "$1"
-            ;;
-          "wip")
-            case "${3:-}" in
-              "save")
-                if [ "${4:-}" = "--restart" ] || [ "${4:-}" = "-r" ]; then
-                  wip_save "$1" "true"
-                else
-                  wip_save "$1" "false"
-                fi
-                ;;
-              "ls"|"list")
-                wip_list "$1"
-                ;;
-              "--continue"|"-c")
-                wip_continue "$1"
-                ;;
-              "--resume"|"-r"|"resume")
-                wip_resume "$1"
-                ;;
-              "delete"|"rm")
-                wip_delete "$1" "${4:-}"
-                ;;
-              *)
-                echo -e "${CYAN}WIP Commands for workspace $1:${NC}"
-                echo "  crabcode $1 wip save [--restart]  Save current state"
-                echo "  crabcode $1 wip ls                List saved WIP states"
-                echo "  crabcode $1 wip --continue        Restore most recent WIP"
-                echo "  crabcode $1 wip --resume          Interactive WIP selection"
-                echo "  crabcode $1 wip delete <name>     Delete a WIP state"
-                ;;
-            esac
-            ;;
-          "")
-            open_workspace "$1"
-            ;;
-          *)
-            error "Unknown command: crabcode $1 $2"
-            echo "Did you mean one of these?"
-            echo "  crabcode $1 restart   Reset git + restart panes"
-            echo "  crabcode $1 continue  Resume session"
-            echo "  crabcode $1 cleanup   Kill window + reset"
-            echo "  crabcode $1 wip       WIP management"
-            exit 1
-            ;;
-        esac
+        handle_ws_command "$@"
       else
-        error "Invalid argument '$1'"
-        echo "Usage: crabcode [number] [--separate|cleanup|restart|wip]"
-        echo "       crabcode restart   (auto-detect from current dir)"
-        echo "       crabcode wip       (WIP management)"
-        echo "       crabcode cheat"
+        error "Unknown command: $1"
+        echo ""
+        echo "Usage: crab ws <N>       Open workspace N"
+        echo "       crab ws new       Create new workspace"
+        echo "       crab restart      Restart current workspace"
+        echo "       crab wip save     Save work in progress"
+        echo "       crab cheat        Show all commands"
         exit 1
       fi
       ;;

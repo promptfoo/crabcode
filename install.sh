@@ -3,9 +3,10 @@
 
 set -e
 
-REPO="https://github.com/your-org/crabcode"
+REPO="https://github.com/promptfoo/crabcode"
 INSTALL_DIR="${CRABCODE_INSTALL_DIR:-$HOME/.local/bin}"
 SCRIPT_NAME="crabcode"
+ALIAS_NAME="crab"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -56,6 +57,10 @@ fi
 
 chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 
+# Create 'crab' symlink
+echo "Creating 'crab' alias..."
+ln -sf "$INSTALL_DIR/$SCRIPT_NAME" "$INSTALL_DIR/$ALIAS_NAME"
+
 # Check if install directory is in PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo -e "${YELLOW}Note: $INSTALL_DIR is not in your PATH.${NC}"
@@ -67,8 +72,10 @@ fi
 
 echo -e "${GREEN}crabcode installed successfully!${NC}"
 echo ""
-echo "Next steps:"
-echo "  1. Run 'crabcode init' to create your config"
-echo "  2. Run 'crabcode 1' to start your first workspace"
+echo "You can use either 'crabcode' or 'crab' command."
 echo ""
-echo "Run 'crabcode cheat' for a quick reference."
+echo "Next steps:"
+echo "  1. Run 'crab init' to create your config"
+echo "  2. Run 'crab ws 1' to start your first workspace"
+echo ""
+echo "Run 'crab cheat' for a quick reference."
