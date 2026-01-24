@@ -12,10 +12,14 @@ brew install tmux yq    # macOS
 # 2. Install crabcode
 curl -fsSL https://raw.githubusercontent.com/promptfoo/crabcode/main/install.sh | bash
 
-# 3. Setup your config
+# 3. Setup (2 questions: repo path + workspace dir)
+cd ~/Dev/my-project
 crab init
 
-# 4. Start your first workspace
+# 4. Auto-detect .env files and ports
+crab config scan
+
+# 5. Start your first workspace
 crab ws 1
 ```
 
@@ -24,8 +28,7 @@ crab ws 1
 Run `crab ws 1` and get:
 - Git worktree created from your main repo
 - A dedicated branch (e.g., `workspace-1`)
-- Isolated ports (e.g., API on 3201, app on 3001)
-- .env files synced with correct ports
+- Isolated ports per workspace (auto-detected from .env files)
 - Tmux window with terminal, server, and your preferred tools
 - Shared volume for local experiments (`.local/`)
 
@@ -84,16 +87,50 @@ Options: `--include-git`, `--include-deps`, `--port=8080`
 
 Auto-excludes: `node_modules`, `.git`, `vendor`, `venv`, `dist`, `build`...
 
+### Config Commands
+
+```bash
+crab init                # Minimal setup (2 questions)
+crab config scan         # Auto-detect .env files and ports
+crab config              # Show current configuration
+```
+
 ### Other Commands
 
 ```bash
-crab init                # Interactive config setup
-crab config              # Show configuration
 crab doctor              # Diagnose issues
 crab ports               # Show port usage
 crab shared              # Show shared volume info
 crab cheat               # Show cheat sheet
 ```
+
+## Setup Flow
+
+### 1. Initialize (minimal)
+
+```bash
+cd ~/Dev/my-project
+crab init
+```
+
+You'll be asked 2 questions:
+- **Main repo path** - where your project lives (defaults to current dir)
+- **Workspace directory** - where to create worktrees (defaults to `<repo>-workspaces`)
+
+### 2. Scan for ports
+
+```bash
+crab config scan
+```
+
+This scans your repo for `.env` and `.env.example` files, finds port variables, and offers to add them to your config.
+
+### 3. Customize config
+
+Edit `~/.crabcode/config.yaml` to set:
+- **Layout panes** - your dev server command, main tool
+- **Shared volume** - persistent storage across resets
+- **Submodules** - if your project has git submodules
 
 ## Configuration
 
@@ -101,19 +138,20 @@ Config file: `~/.crabcode/config.yaml`
 
 ```yaml
 session_name: crab
-workspace_base: ~/Dev/my-project/workspaces
+workspace_base: ~/Dev/my-project-workspaces
 main_repo: ~/Dev/my-project
 
 workspaces:
-  count: 5
-  prefix: workspace
+  prefix: ws
   branch_pattern: workspace-{N}
 
-ports:
-  api_base: 3200    # ws1=3201, ws2=3202
-  app_base: 3000    # ws1=3001, ws2=3002
-
-install_command: pnpm install
+# Auto-detected by 'crab config scan'
+env_sync:
+  files:
+    - path: server/.env
+      ports: [API_PORT, ADMIN_PORT]
+    - path: app/.env
+      ports: [VITE_PORT]
 
 layout:
   panes:
@@ -122,34 +160,19 @@ layout:
     - name: server
       command: pnpm dev
     - name: main
-      command: claude --dangerously-skip-permissions
+      command: claude
 
-env_sync:
-  files:
-    - path: server/.env
-      port_var: API_PORT
-    - path: app/.env
-      port_var: VITE_API_BASE_URL
-
-submodules:
-  - path: my-submodule
-    reset_to: origin/main
-    install_command: pnpm install
-
-cleanup:
-  preserve_files: ".env"
-
-# Shared volume for local experiments
+# Optional: persistent storage across resets
 shared_volume:
   enabled: true
   path: ~/.crabcode/shared
   link_as: .local
 
-# Toolkit config (optional)
-toolkit:
-  slack:
-    token: xoxb-your-token
-    default_channel: "#dev"
+# Optional: git submodule handling
+submodules:
+  - path: my-submodule
+    reset_to: origin/main
+    install_command: pnpm install
 ```
 
 See `examples/` for more configuration examples.
@@ -186,6 +209,17 @@ cd crabcode
 chmod +x src/crabcode
 sudo ln -s $(pwd)/src/crabcode /usr/local/bin/crabcode
 sudo ln -s $(pwd)/src/crabcode /usr/local/bin/crab
+```
+
+### Reinstall / Update
+
+```bash
+# If installed via one-liner, just run it again:
+curl -fsSL https://raw.githubusercontent.com/promptfoo/crabcode/main/install.sh | bash
+
+# If installed manually from git:
+cd /path/to/crabcode
+git pull origin main
 ```
 
 ## Tmux Layout
@@ -237,13 +271,16 @@ With prefix `Ctrl+a`:
 
 5. **Setup crabcode:**
    ```bash
-   crab init
-   # Follow prompts to configure your project
+   cd ~/Dev/your-project
+   crab init              # 2 questions: repo path + workspace dir
+   crab config scan       # auto-detect .env files and ports
    ```
 
-6. **Verify setup:**
+6. **Edit config for your project:**
    ```bash
-   crab doctor
+   # Set your layout commands in ~/.crabcode/config.yaml
+   # - server pane: your dev server (e.g., pnpm dev)
+   # - main pane: your main tool (e.g., claude)
    ```
 
 7. **Start working:**

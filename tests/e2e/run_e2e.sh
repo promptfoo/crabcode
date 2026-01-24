@@ -282,10 +282,15 @@ log "Testing init command..."
 # Backup existing config
 cp ~/.crabcode/config.yaml ~/.crabcode/config.yaml.backup
 
-# Test init with piped input
+# Test init with piped input (now only 2 questions: repo path + workspace dir)
 run_test "crabcode init (with input)" \
-  "echo -e 'testcrab\n~/test-main\n~/test-ws\n2\n4000\n5000\necho test\necho main\n' | crabcode init" \
-  "Config|created|saved"
+  "echo -e '~/test-main\n~/test-ws\n' | crabcode init" \
+  "Config|created"
+
+# Test config scan command exists
+run_test "crabcode config scan (runs without error)" \
+  "crabcode config scan 2>&1 | head -5" \
+  "Scanning|Found|No .env"
 
 # Restore original config
 mv ~/.crabcode/config.yaml.backup ~/.crabcode/config.yaml
