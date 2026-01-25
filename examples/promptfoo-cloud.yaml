@@ -28,11 +28,17 @@ layout:
 env_sync:
   files:
     - path: server/.env
-      port_var: API_PORT
+      copy_from: server/.env.example
+      ports: [API_PORT, ADMIN_PORT]   # managed: incremented per workspace
     - path: app/.env
-      port_var: VITE_API_BASE_URL
+      copy_from: app/.env.example
+      ports: [VITE_PORT]
+      refs:                            # URL vars that reference managed ports
+        VITE_API_URL: API_PORT         # rewrites :3200 → :3201 for ws1
     - path: promptfoo/.env
-      port_var: PROMPTFOO_REMOTE_GENERATION_URL
+      copy_from: promptfoo/.env.example
+      refs:
+        PROMPTFOO_REMOTE_GENERATION_URL: API_PORT
 
 submodules:
   - path: promptfoo

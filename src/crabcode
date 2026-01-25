@@ -266,63 +266,162 @@ read_env_port() {
 }
 
 # Sync .env files for a workspace
+# New format supports:
+#   - copy_from: template file to copy from
+#   - ports: array of port vars to manage (increment per workspace)
+#   - refs: map of URL vars that reference managed ports
 sync_env_files() {
   local dir=$1
-  local api_port=$2
+  local workspace_num=$2
   local quiet=${3:-false}
 
   local env_files_count=$(yq -r '.env_sync.files | length // 0' "$CONFIG_FILE" 2>/dev/null)
   [ "$env_files_count" = "0" ] && return
 
+  # Temp file to store resolved ports (bash 3.x compatible)
+  local ports_file=$(mktemp)
+  trap "rm -f '$ports_file'" RETURN
+
+  # First pass: resolve all managed ports
   for ((i=0; i<env_files_count; i++)); do
     local env_path=$(yq -r ".env_sync.files[$i].path" "$CONFIG_FILE" 2>/dev/null)
-    local port_var=$(yq -r ".env_sync.files[$i].port_var" "$CONFIG_FILE" 2>/dev/null)
+    local copy_from=$(yq -r ".env_sync.files[$i].copy_from // \"\"" "$CONFIG_FILE" 2>/dev/null)
 
     [ -z "$env_path" ] || [ "$env_path" = "null" ] && continue
-    [ -z "$port_var" ] || [ "$port_var" = "null" ] && continue
 
     local full_path="$dir/$env_path"
-    local example_path="$dir/${env_path%.env}.env.example"
-    [ ! -f "$example_path" ] && example_path="$dir/$env_path.example"
+    local template_path=""
 
-    # Create from example if needed
-    if [ ! -f "$full_path" ] && [ -f "$example_path" ]; then
-      cp "$example_path" "$full_path"
-      [ "$quiet" != "true" ] && echo -e "  ${YELLOW}Created $env_path from example${NC}"
+    # Determine template path
+    if [ -n "$copy_from" ] && [ "$copy_from" != "null" ]; then
+      template_path="$dir/$copy_from"
+    else
+      # Fallback: look for .env.example
+      template_path="$dir/${env_path}.example"
+      [ ! -f "$template_path" ] && template_path="$dir/${env_path%.env}.env.example"
     fi
 
-    # Update port variable if file exists
-    if [ -f "$full_path" ] && grep -q "^${port_var}=" "$full_path" 2>/dev/null; then
-      local current_line=$(grep "^${port_var}=" "$full_path")
-      local current_value=$(echo "$current_line" | cut -d= -f2-)
+    # Create from template if target doesn't exist
+    if [ ! -f "$full_path" ] && [ -f "$template_path" ]; then
+      mkdir -p "$(dirname "$full_path")"
+      cp "$template_path" "$full_path"
+      [ "$quiet" != "true" ] && echo -e "  ${YELLOW}Created $env_path from template${NC}"
+    fi
 
-      # Extract current port
-      local current_port=""
-      if [[ "$current_value" =~ :([0-9]+) ]]; then
-        current_port="${BASH_REMATCH[1]}"
-      elif [[ "$current_value" =~ ^[0-9]+$ ]]; then
-        current_port="$current_value"
+    # Skip if file still doesn't exist
+    [ ! -f "$full_path" ] && continue
+
+    # Get ports array (supports both old port_var and new ports[] format)
+    local ports_json=$(yq -r ".env_sync.files[$i].ports // []" "$CONFIG_FILE" 2>/dev/null)
+    local old_port_var=$(yq -r ".env_sync.files[$i].port_var // \"\"" "$CONFIG_FILE" 2>/dev/null)
+
+    # Handle old format (port_var: single var)
+    if [ -n "$old_port_var" ] && [ "$old_port_var" != "null" ]; then
+      ports_json="[\"$old_port_var\"]"
+    fi
+
+    # Process each port var
+    local ports_count=$(echo "$ports_json" | yq -r 'length // 0' 2>/dev/null)
+    for ((p=0; p<ports_count; p++)); do
+      local port_var=$(echo "$ports_json" | yq -r ".[$p]" 2>/dev/null)
+      [ -z "$port_var" ] || [ "$port_var" = "null" ] && continue
+
+      # Read current value from workspace .env
+      local current_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
+
+      # If no current value, try to read base from main repo
+      if [ -z "$current_value" ]; then
+        local main_env="$MAIN_REPO/$env_path"
+        [ -f "$main_env" ] && current_value=$(grep "^${port_var}=" "$main_env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
       fi
 
-      if [ -n "$current_port" ] && [ "$current_port" != "$api_port" ]; then
-        # Replace port
-        local new_value
-        if [[ "$current_value" =~ : ]]; then
-          new_value=$(echo "$current_value" | sed "s/:${current_port}/:${api_port}/")
-        else
-          new_value="$api_port"
-        fi
+      # Extract base port number
+      local base_port=""
+      if echo "$current_value" | grep -qE '^[0-9]+$'; then
+        base_port="$current_value"
+      elif echo "$current_value" | grep -qE ':[0-9]+'; then
+        base_port=$(echo "$current_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
+      fi
 
-        # Use sed to update (macOS compatible)
+      [ -z "$base_port" ] && continue
+
+      # Calculate workspace port
+      local new_port=$((base_port + workspace_num))
+
+      # Check if port is available, find next free if not
+      while lsof -i ":$new_port" &>/dev/null; do
+        new_port=$((new_port + 1))
+        # Safety limit
+        if [ $new_port -gt $((base_port + 100)) ]; then
+          new_port=$((base_port + workspace_num))
+          break
+        fi
+      done
+
+      # Store resolved port for refs lookup
+      echo "$port_var=$new_port" >> "$ports_file"
+
+      # Update the .env file
+      local new_value
+      if echo "$current_value" | grep -qE '^[0-9]+$'; then
+        new_value="$new_port"
+      else
+        # Replace port in URL/string
+        new_value=$(echo "$current_value" | sed "s/:${base_port}/:${new_port}/g")
+      fi
+
+      if [ "$current_value" != "$new_value" ]; then
         if [[ "$OSTYPE" == "darwin"* ]]; then
           sed -i '' "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
         else
           sed -i "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
         fi
-
-        [ "$quiet" != "true" ] && echo -e "  ${GREEN}Synced $env_path: port $current_port → $api_port${NC}"
+        [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $port_var → $new_port${NC}"
       fi
-    fi
+    done
+  done
+
+  # Second pass: process refs (URL vars that reference managed ports)
+  for ((i=0; i<env_files_count; i++)); do
+    local env_path=$(yq -r ".env_sync.files[$i].path" "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$env_path" ] || [ "$env_path" = "null" ] && continue
+
+    local full_path="$dir/$env_path"
+    [ ! -f "$full_path" ] && continue
+
+    # Get refs map
+    local refs_keys=$(yq -r ".env_sync.files[$i].refs // {} | keys | .[]" "$CONFIG_FILE" 2>/dev/null)
+    [ -z "$refs_keys" ] && continue
+
+    echo "$refs_keys" | while read -r ref_var; do
+      [ -z "$ref_var" ] && continue
+
+      local ref_port_var=$(yq -r ".env_sync.files[$i].refs[\"$ref_var\"]" "$CONFIG_FILE" 2>/dev/null)
+      [ -z "$ref_port_var" ] || [ "$ref_port_var" = "null" ] && continue
+
+      # Look up the resolved port
+      local resolved_port=$(grep "^${ref_port_var}=" "$ports_file" 2>/dev/null | cut -d= -f2)
+      [ -z "$resolved_port" ] && continue
+
+      # Read current value
+      local current_value=$(grep "^${ref_var}=" "$full_path" 2>/dev/null | cut -d= -f2-)
+      [ -z "$current_value" ] && continue
+
+      # Extract current port from URL
+      local current_port=$(echo "$current_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
+      [ -z "$current_port" ] && continue
+
+      if [ "$current_port" != "$resolved_port" ]; then
+        local new_value=$(echo "$current_value" | sed "s/:${current_port}/:${resolved_port}/g")
+
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+          sed -i '' "s|^${ref_var}=.*|${ref_var}=$new_value|" "$full_path"
+        else
+          sed -i "s|^${ref_var}=.*|${ref_var}=$new_value|" "$full_path"
+        fi
+        [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $ref_var → :$resolved_port${NC}"
+      fi
+    done
   done
 }
 
@@ -454,9 +553,8 @@ create_workspace() {
   # Setup shared volume
   setup_shared_volume "$workspace_dir"
 
-  # Sync .env files
-  local api_port=$((API_PORT_BASE + num))
-  sync_env_files "$workspace_dir" "$api_port"
+  # Sync .env files (pass workspace number for port calculation)
+  sync_env_files "$workspace_dir" "$num"
 
   success "Workspace $num created at $workspace_dir"
 }
@@ -810,12 +908,8 @@ check_and_setup_workspace() {
   # Setup shared volume (handles migration if needed)
   setup_shared_volume "$dir"
 
-  local api_port=$((API_PORT_BASE + num))
-  local env_port=$(read_env_port "$dir" "api")
-  [ -n "$env_port" ] && api_port="$env_port"
-
-  echo -e "${BLUE}Syncing .env files to API port $api_port...${NC}"
-  sync_env_files "$dir" "$api_port"
+  echo -e "${BLUE}Syncing .env files for workspace $num...${NC}"
+  sync_env_files "$dir" "$num"
 }
 
 # Check if dependencies need installing
@@ -2197,51 +2291,8 @@ EOF
 }
 
 # =============================================================================
-# Config Scan - Auto-detect env files and ports
+# Config Scan - Discover env files and provide template
 # =============================================================================
-
-# Helper to extract ports from an env file (bash 3.x compatible)
-_extract_ports_from_file() {
-  local file="$1"
-  local ports=""
-
-  while IFS='=' read -r key value || [ -n "$key" ]; do
-    # Skip comments and empty lines
-    case "$key" in
-      \#*|"") continue ;;
-    esac
-
-    # Clean up key and value
-    key=$(echo "$key" | tr -d '[:space:]')
-    value=$(echo "$value" | tr -d '[:space:]' | tr -d '"' | tr -d "'")
-
-    # Check if it's a port-like variable
-    local is_port=false
-    case "$key" in
-      *[Pp][Oo][Rr][Tt]*) is_port=true ;;
-    esac
-
-    # Check if value looks like a port
-    local port_num=""
-    if echo "$value" | grep -qE '^[0-9]{4,5}$'; then
-      port_num="$value"
-      is_port=true
-    elif echo "$value" | grep -qE ':[0-9]{4,5}'; then
-      port_num=$(echo "$value" | grep -oE ':[0-9]+' | tr -d ':')
-      is_port=true
-    fi
-
-    if [ "$is_port" = true ] && [ -n "$key" ]; then
-      if [ -n "$ports" ]; then
-        ports="$ports $key"
-      else
-        ports="$key"
-      fi
-    fi
-  done < "$file"
-
-  echo "$ports"
-}
 
 config_scan() {
   echo -e "${CYAN}Scanning for .env files...${NC}"
@@ -2268,7 +2319,7 @@ config_scan() {
     [ -z "$file" ] && continue
     env_files="$env_files$file"$'\n'
     file_count=$((file_count + 1))
-  done < <(find "$repo_path" -maxdepth 3 -type f \( -name ".env" -o -name ".env.example" -o -name ".env.local" \) ! -path "*/node_modules/*" ! -path "*/.git/*" 2>/dev/null)
+  done < <(find "$repo_path" -maxdepth 3 -type f \( -name ".env" -o -name ".env.example" \) ! -path "*/node_modules/*" ! -path "*/.git/*" 2>/dev/null | sort)
 
   if [ $file_count -eq 0 ]; then
     echo "  No .env files found in $repo_path"
@@ -2280,142 +2331,108 @@ config_scan() {
   echo -e "Found ${GREEN}${file_count}${NC} env file(s):"
   echo ""
 
-  # Use temp file to store file:ports mappings (bash 3.x compatible)
-  local tmp_file=$(mktemp)
-  trap "rm -f '$tmp_file'" EXIT
+  # Group files by directory, prioritize .env over .env.example
+  local dirs_seen=""
+  local files_to_show=""
 
-  local has_ports=false
-
-  # Process each file
   echo "$env_files" | while IFS= read -r file; do
     [ -z "$file" ] && continue
-
     local rel_path="${file#$repo_path/}"
-    local ports=$(_extract_ports_from_file "$file")
+    local dir_path=$(dirname "$rel_path")
+    local file_name=$(basename "$file")
 
-    echo -e "  ${BOLD}$rel_path${NC}"
-    if [ -n "$ports" ]; then
-      for port in $ports; do
-        echo -e "    └─ ${GREEN}$port${NC}"
-      done
-      echo "$rel_path:$ports" >> "$tmp_file"
-    else
-      echo "    └─ (no port variables detected)"
+    # Determine the target .env path (without .example)
+    local target_path="$rel_path"
+    local copy_from=""
+
+    case "$file_name" in
+      .env.example)
+        target_path="${rel_path%.example}"
+        # Check if .env exists (prioritize it)
+        if [ -f "$repo_path/$target_path" ]; then
+          # .env exists, skip .env.example
+          continue
+        fi
+        copy_from="$rel_path"
+        ;;
+      .env)
+        # Check if .env.example also exists
+        if [ -f "$file.example" ]; then
+          copy_from="${rel_path}.example"
+        fi
+        ;;
+    esac
+
+    echo -e "  ${BOLD}$target_path${NC}"
+    if [ -n "$copy_from" ]; then
+      echo -e "    └─ copy from: ${CYAN}$copy_from${NC}"
     fi
   done
 
   echo ""
-
-  # Check if we found any ports
-  if [ ! -s "$tmp_file" ]; then
-    echo "No port variables detected. You can manually configure env_sync in:"
-    echo "  $CONFIG_FILE"
-    echo ""
-    echo -e "${CYAN}Tip:${NC} Re-run 'crab config scan' anytime your .env files change."
-    return 0
-  fi
-
-  echo -e "${CYAN}Suggested env_sync config:${NC}"
+  echo -e "${CYAN}Add to ~/.crabcode/config.yaml:${NC}"
   echo ""
   echo "env_sync:"
   echo "  files:"
 
-  # Build suggestion from temp file
-  local seen_files=""
-  while IFS=':' read -r rel_path ports; do
-    [ -z "$rel_path" ] && continue
+  # Generate template
+  local shown_paths=""
+  echo "$env_files" | while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    local rel_path="${file#$repo_path/}"
+    local file_name=$(basename "$file")
 
-    local file_name=$(basename "$rel_path")
-    local display_path="$rel_path"
+    local target_path="$rel_path"
+    local copy_from=""
 
-    # Skip .example files if we have the main .env
     case "$file_name" in
-      *.example)
-        local main_path="${rel_path%.example}"
-        if echo "$env_files" | grep -q "^$repo_path/$main_path$"; then
+      .env.example)
+        target_path="${rel_path%.example}"
+        if [ -f "$repo_path/$target_path" ]; then
           continue
         fi
-        display_path="$main_path"
+        copy_from="$rel_path"
+        ;;
+      .env)
+        if [ -f "$file.example" ]; then
+          copy_from="${rel_path}.example"
+        fi
         ;;
     esac
 
-    # Skip if we've already shown this path
-    case "$seen_files" in
-      *"$display_path"*) continue ;;
+    # Skip if already shown
+    case "$shown_paths" in
+      *"$target_path"*) continue ;;
     esac
-    seen_files="$seen_files $display_path"
+    shown_paths="$shown_paths $target_path"
 
-    echo "    - path: $display_path"
-    echo -n "      ports: ["
-    local first=true
-    for port in $ports; do
-      if [ "$first" = true ]; then
-        echo -n "$port"
-        first=false
-      else
-        echo -n ", $port"
-      fi
-    done
-    echo "]"
-  done < "$tmp_file"
-
-  echo ""
-  read -p "Add this to your config? [y/N]: " confirm
-  if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-    # Check if env_sync already exists
-    if yq -r '.env_sync' "$CONFIG_FILE" 2>/dev/null | grep -q -v "null"; then
-      warn "env_sync already exists in config. Please edit manually."
-      echo "Config file: $CONFIG_FILE"
-    else
-      # Append env_sync to config
-      echo "" >> "$CONFIG_FILE"
-      echo "env_sync:" >> "$CONFIG_FILE"
-      echo "  files:" >> "$CONFIG_FILE"
-
-      local seen_files=""
-      while IFS=':' read -r rel_path ports; do
-        [ -z "$rel_path" ] && continue
-
-        local file_name=$(basename "$rel_path")
-        local display_path="$rel_path"
-
-        case "$file_name" in
-          *.example)
-            local main_path="${rel_path%.example}"
-            if echo "$env_files" | grep -q "^$repo_path/$main_path$"; then
-              continue
-            fi
-            display_path="$main_path"
-            ;;
-        esac
-
-        case "$seen_files" in
-          *"$display_path"*) continue ;;
-        esac
-        seen_files="$seen_files $display_path"
-
-        echo "    - path: $display_path" >> "$CONFIG_FILE"
-        echo -n "      ports: [" >> "$CONFIG_FILE"
-        local first=true
-        for port in $ports; do
-          if [ "$first" = true ]; then
-            echo -n "$port" >> "$CONFIG_FILE"
-            first=false
-          else
-            echo -n ", $port" >> "$CONFIG_FILE"
-          fi
-        done
-        echo "]" >> "$CONFIG_FILE"
-      done < "$tmp_file"
-
-      success "Added env_sync config!"
-      echo ""
-      echo "Edit $CONFIG_FILE to customize further."
+    echo "    - path: $target_path"
+    if [ -n "$copy_from" ]; then
+      echo "      copy_from: $copy_from"
     fi
-  fi
+    echo "      ports: []           # e.g., [API_PORT, ADMIN_PORT]"
+    echo "      # refs:             # optional: URL vars that reference ports"
+    echo "      #   VITE_API_URL: API_PORT"
+  done
 
   echo ""
-  echo -e "${CYAN}Tip:${NC} Re-run 'crab config scan' anytime your .env files change."
+  echo -e "${CYAN}How it works:${NC}"
+  echo "  - ports: vars crab manages (increments per workspace, checks availability)"
+  echo "  - refs: URL vars that reference a managed port (auto-rewritten)"
+  echo "  - other vars: just copied from copy_from template"
+  echo ""
+  echo -e "${CYAN}Example for promptfoo-cloud:${NC}"
+  echo ""
+  echo "env_sync:"
+  echo "  files:"
+  echo "    - path: server/.env"
+  echo "      copy_from: server/.env.example"
+  echo "      ports: [API_PORT, ADMIN_PORT]"
+  echo "    - path: app/.env"
+  echo "      copy_from: app/.env.example"
+  echo "      ports: [VITE_PORT]"
+  echo "      refs:"
+  echo "        VITE_API_URL: API_PORT"
 }
 
 show_config() {
