@@ -2648,6 +2648,37 @@ slack_chat() {
   done
 }
 
+# Log file for sent messages
+SLACK_SENT_LOG="$CONFIG_DIR/slack_sent.log"
+
+# Log a sent message
+slack_log_sent() {
+  local target="$1"
+  local message="$2"
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  local display_name=$(slack_get_display_name)
+
+  mkdir -p "$CONFIG_DIR"
+  echo "[$timestamp] $display_name → $target: $message" >> "$SLACK_SENT_LOG"
+}
+
+# View sent messages log
+slack_view_sent() {
+  local count="${1:-20}"
+
+  if [ ! -f "$SLACK_SENT_LOG" ]; then
+    echo "No sent messages yet."
+    return
+  fi
+
+  echo -e "${CYAN}━━ Sent Messages ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  tail -n "$count" "$SLACK_SENT_LOG" | while IFS= read -r line; do
+    echo -e "  ${GRAY}$line${NC}"
+  done
+  echo ""
+}
+
 # Quick send message
 slack_send() {
   local target="$1"
@@ -2692,6 +2723,7 @@ slack_send() {
   fi
 
   if slack_post_message "$channel_id" "$message"; then
+    slack_log_sent "$target" "$message"
     success "Message sent to $target"
   fi
 }
@@ -2785,6 +2817,10 @@ handle_slack_command() {
       shift
       slack_read "$@"
       ;;
+    "sent"|"log")
+      shift
+      slack_view_sent "$@"
+      ;;
     "users"|"list")
       shift
       slack_list_users "$@"
@@ -2824,6 +2860,8 @@ show_slack_help() {
   echo "  crab slack chat #channel        Open chat session in channel"
   echo ""
   echo "Utilities:"
+  echo "  crab slack sent                 View your sent messages log"
+  echo "  crab slack sent 50              Show last 50 sent messages"
   echo "  crab slack users                List all users"
   echo "  crab slack users mike           Search users by name"
   echo ""
