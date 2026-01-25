@@ -1214,6 +1214,9 @@ restart_workspace() {
 
   reset_submodules "$dir"
 
+  # Ensure shared volume is set up (migrates existing .local if needed)
+  setup_shared_volume "$dir"
+
   success "Git reset complete (on branch: $branch_name)"
 
   # If we're in tmux and the window exists, restart the panes
