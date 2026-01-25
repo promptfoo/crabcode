@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CRABCODE | Ship Code. Touch Grass. Repeat.</title>
+  <meta name="description" content="Lightning-fast tmux workspace manager for multi-repo development. Start a full dev environment in seconds.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦀</text></svg>">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Archivo+Black&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg-void: #0a0a0a;
+      --bg-terminal: #0d1117;
+      --terminal-green: #39ff14;
+      --crab-orange: #ff6b35;
+      --crab-coral: #ff8c61;
+      --text-main: #e6edf3;
+      --text-dim: #7d8590;
+      --glow-green: 0 0 20px rgba(57, 255, 20, 0.5);
+      --glow-orange: 0 0 20px rgba(255, 107, 53, 0.5);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--bg-void);
+      color: var(--text-main);
+      overflow-x: hidden;
+      line-height: 1.6;
+    }
+
+    /* Scanline effect */
+    body::before {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0,0,0,0.1) 0px,
+        rgba(0,0,0,0.1) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+      pointer-events: none;
+      z-index: 1000;
+    }
+
+    /* Noise texture overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+      opacity: 0.03;
+      pointer-events: none;
+      z-index: 999;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 2rem;
+    }
+
+    /* HERO SECTION */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+      padding: 2rem;
+    }
+
+    .hero-grid {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-image:
+        linear-gradient(rgba(57, 255, 20, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(57, 255, 20, 0.03) 1px, transparent 1px);
+      background-size: 50px 50px;
+      animation: gridPulse 4s ease-in-out infinite;
+    }
+
+    @keyframes gridPulse {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 1; }
+    }
+
+    .ascii-crab {
+      font-size: clamp(0.4rem, 1.2vw, 0.8rem);
+      color: var(--crab-orange);
+      text-shadow: var(--glow-orange);
+      white-space: pre;
+      line-height: 1.2;
+      animation: crabFloat 3s ease-in-out infinite;
+      margin-bottom: 2rem;
+    }
+
+    @keyframes crabFloat {
+      0%, 100% { transform: translateY(0) rotate(-1deg); }
+      50% { transform: translateY(-10px) rotate(1deg); }
+    }
+
+    .hero-title {
+      font-family: 'Archivo Black', sans-serif;
+      font-size: clamp(4rem, 15vw, 12rem);
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, var(--terminal-green) 0%, var(--crab-orange) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      text-align: center;
+      position: relative;
+    }
+
+    .hero-title::after {
+      content: 'CRABCODE';
+      position: absolute;
+      top: 4px;
+      left: 4px;
+      background: linear-gradient(135deg, rgba(57, 255, 20, 0.3) 0%, rgba(255, 107, 53, 0.3) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      z-index: -1;
+    }
+
+    .hero-tagline {
+      font-size: clamp(1rem, 2.5vw, 1.5rem);
+      color: var(--text-dim);
+      margin-top: 1rem;
+      text-align: center;
+    }
+
+    .hero-tagline .highlight {
+      color: var(--terminal-green);
+      text-shadow: var(--glow-green);
+    }
+
+    .hero-sub {
+      font-size: clamp(0.9rem, 1.5vw, 1.1rem);
+      color: var(--text-dim);
+      margin-top: 2rem;
+      text-align: center;
+      max-width: 600px;
+    }
+
+    .cta-section {
+      margin-top: 3rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.5rem;
+    }
+
+    .install-box {
+      background: var(--bg-terminal);
+      border: 2px solid var(--terminal-green);
+      padding: 1rem 2rem;
+      border-radius: 4px;
+      position: relative;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: var(--glow-green);
+    }
+
+    .install-box:hover {
+      transform: scale(1.02);
+      box-shadow: 0 0 40px rgba(57, 255, 20, 0.4);
+    }
+
+    .install-box::before {
+      content: '$ ';
+      color: var(--crab-orange);
+    }
+
+    .install-box code {
+      color: var(--terminal-green);
+      font-weight: bold;
+    }
+
+    .install-box .tooltip {
+      position: absolute;
+      top: -30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--crab-orange);
+      color: var(--bg-void);
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .install-box:hover .tooltip {
+      opacity: 1;
+    }
+
+    .btn-github {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.5rem;
+      background: transparent;
+      border: 1px solid var(--text-dim);
+      color: var(--text-main);
+      text-decoration: none;
+      border-radius: 4px;
+      transition: all 0.3s ease;
+    }
+
+    .btn-github:hover {
+      border-color: var(--crab-orange);
+      color: var(--crab-orange);
+    }
+
+    .scroll-indicator {
+      position: absolute;
+      bottom: 2rem;
+      left: 50%;
+      transform: translateX(-50%);
+      animation: bounce 2s infinite;
+    }
+
+    .scroll-indicator svg {
+      width: 24px;
+      height: 24px;
+      stroke: var(--text-dim);
+    }
+
+    @keyframes bounce {
+      0%, 20%, 50%, 80%, 100% { transform: translateX(-50%) translateY(0); }
+      40% { transform: translateX(-50%) translateY(-10px); }
+      60% { transform: translateX(-50%) translateY(-5px); }
+    }
+
+    /* BENTO GRID */
+    .bento-section {
+      padding: 6rem 0;
+    }
+
+    .section-header {
+      text-align: center;
+      margin-bottom: 4rem;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      color: var(--crab-orange);
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      margin-bottom: 0.5rem;
+    }
+
+    .section-title {
+      font-family: 'Archivo Black', sans-serif;
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      color: var(--text-main);
+    }
+
+    .bento-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 1.5rem;
+    }
+
+    .bento-card {
+      background: var(--bg-terminal);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 2rem;
+      position: relative;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .bento-card:hover {
+      border-color: var(--terminal-green);
+      transform: translateY(-4px);
+    }
+
+    .bento-card.large {
+      grid-column: span 8;
+    }
+
+    .bento-card.medium {
+      grid-column: span 4;
+    }
+
+    .bento-card.half {
+      grid-column: span 6;
+    }
+
+    @media (max-width: 768px) {
+      .bento-card.large,
+      .bento-card.medium,
+      .bento-card.half {
+        grid-column: span 12;
+      }
+    }
+
+    .bento-card .icon {
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+
+    .bento-card h3 {
+      font-size: 1.25rem;
+      margin-bottom: 0.75rem;
+      color: var(--text-main);
+    }
+
+    .bento-card p {
+      color: var(--text-dim);
+      font-size: 0.9rem;
+    }
+
+    .bento-card .terminal-preview {
+      background: var(--bg-void);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-top: 1rem;
+      font-size: 0.8rem;
+      overflow-x: auto;
+    }
+
+    .bento-card .terminal-preview .prompt {
+      color: var(--crab-orange);
+    }
+
+    .bento-card .terminal-preview .command {
+      color: var(--terminal-green);
+    }
+
+    .bento-card .terminal-preview .output {
+      color: var(--text-dim);
+    }
+
+    /* LAYOUT SHOWCASE */
+    .layout-section {
+      padding: 6rem 0;
+    }
+
+    .tmux-layout {
+      background: var(--bg-terminal);
+      border: 2px solid var(--terminal-green);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--glow-green);
+    }
+
+    .tmux-titlebar {
+      background: var(--bg-void);
+      padding: 0.5rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .tmux-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .tmux-dot.red { background: #ff5f56; }
+    .tmux-dot.yellow { background: #ffbd2e; }
+    .tmux-dot.green { background: #27c93f; }
+
+    .tmux-title {
+      color: var(--text-dim);
+      font-size: 0.75rem;
+      margin-left: 1rem;
+    }
+
+    .tmux-body {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      height: 400px;
+    }
+
+    .tmux-pane {
+      padding: 1rem;
+      border: 1px solid rgba(255,255,255,0.05);
+      position: relative;
+    }
+
+    .tmux-pane.main {
+      grid-row: span 2;
+      background: linear-gradient(135deg, rgba(255, 107, 53, 0.05) 0%, transparent 100%);
+    }
+
+    .pane-label {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      background: var(--bg-void);
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    .pane-content {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+    }
+
+    .pane-content .active {
+      color: var(--terminal-green);
+    }
+
+    .pane-content .crab-emoji {
+      animation: crabWalk 0.5s steps(2) infinite;
+    }
+
+    @keyframes crabWalk {
+      0%, 100% { transform: translateX(0); }
+      50% { transform: translateX(2px); }
+    }
+
+    /* MANIFESTO */
+    .manifesto {
+      padding: 8rem 0;
+      background: linear-gradient(180deg, var(--bg-void) 0%, var(--bg-terminal) 50%, var(--bg-void) 100%);
+    }
+
+    .manifesto-content {
+      max-width: 800px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .manifesto h2 {
+      font-family: 'Archivo Black', sans-serif;
+      font-size: clamp(2rem, 6vw, 4rem);
+      margin-bottom: 2rem;
+      line-height: 1.1;
+    }
+
+    .manifesto h2 .strike {
+      text-decoration: line-through;
+      color: var(--text-dim);
+    }
+
+    .manifesto h2 .green {
+      color: var(--terminal-green);
+      text-shadow: var(--glow-green);
+    }
+
+    .manifesto h2 .orange {
+      color: var(--crab-orange);
+      text-shadow: var(--glow-orange);
+    }
+
+    .manifesto-list {
+      list-style: none;
+      text-align: left;
+      max-width: 500px;
+      margin: 3rem auto;
+    }
+
+    .manifesto-list li {
+      padding: 0.75rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .manifesto-list .check {
+      color: var(--terminal-green);
+      font-weight: bold;
+    }
+
+    .manifesto-list .x {
+      color: #ff4757;
+    }
+
+    /* COMMANDS SECTION */
+    .commands-section {
+      padding: 6rem 0;
+    }
+
+    .command-group {
+      margin-bottom: 3rem;
+    }
+
+    .command-group h3 {
+      color: var(--crab-orange);
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+    }
+
+    .command-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+      gap: 1rem;
+    }
+
+    .command-item {
+      background: var(--bg-terminal);
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 1rem;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+    }
+
+    .command-item:hover {
+      border-color: var(--terminal-green);
+    }
+
+    .command-item code {
+      color: var(--terminal-green);
+      font-weight: bold;
+    }
+
+    .command-item p {
+      color: var(--text-dim);
+      font-size: 0.8rem;
+      margin-top: 0.5rem;
+    }
+
+    /* FOOTER */
+    footer {
+      padding: 4rem 0;
+      border-top: 1px solid rgba(255,255,255,0.1);
+      text-align: center;
+    }
+
+    .footer-crab {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      animation: crabFloat 3s ease-in-out infinite;
+    }
+
+    .footer-tagline {
+      color: var(--text-dim);
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+
+    .footer-links {
+      display: flex;
+      justify-content: center;
+      gap: 2rem;
+      flex-wrap: wrap;
+    }
+
+    .footer-links a {
+      color: var(--text-main);
+      text-decoration: none;
+      transition: color 0.3s;
+    }
+
+    .footer-links a:hover {
+      color: var(--crab-orange);
+    }
+
+    .footer-copy {
+      margin-top: 3rem;
+      color: var(--text-dim);
+      font-size: 0.75rem;
+    }
+
+    /* GLITCH EFFECT for title on hover */
+    .hero-title:hover {
+      animation: glitch 0.3s ease-in-out;
+    }
+
+    @keyframes glitch {
+      0% { transform: translate(0); }
+      20% { transform: translate(-2px, 2px); }
+      40% { transform: translate(2px, -2px); }
+      60% { transform: translate(-1px, -1px); }
+      80% { transform: translate(1px, 1px); }
+      100% { transform: translate(0); }
+    }
+
+    /* Typing animation for terminal */
+    .typing {
+      border-right: 2px solid var(--terminal-green);
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      50% { border-color: transparent; }
+    }
+
+    /* Easter egg - konami code listener for extra crab mode */
+    .crab-rain {
+      position: fixed;
+      font-size: 2rem;
+      animation: fall linear forwards;
+      z-index: 9999;
+    }
+
+    @keyframes fall {
+      to {
+        transform: translateY(100vh) rotate(360deg);
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- HERO -->
+  <section class="hero">
+    <div class="hero-grid"></div>
+
+    <pre class="ascii-crab">
+    ___       ___
+   /   \     /   \
+  | () |___| () |
+   \___/     \___/
+     ||   🦀   ||
+     ||_______||
+    /|  |   |  |\
+   / |__|   |__| \
+  |___|       |___|
+    </pre>
+
+    <h1 class="hero-title">CRABCODE</h1>
+    <p class="hero-tagline">Ship Code. <span class="highlight">Touch Grass.</span> Repeat.</p>
+    <p class="hero-sub">
+      Lightning-fast tmux workspace manager for the chronically productive.<br>
+      Because your time is too valuable for <code>cd</code>-ing around like it's 1999.
+    </p>
+
+    <div class="cta-section">
+      <div class="install-box" onclick="copyInstall()">
+        <span class="tooltip">Click to copy</span>
+        <code>curl -fsSL https://raw.githubusercontent.com/promptfoo/crabcode/main/install.sh | bash</code>
+      </div>
+
+      <a href="https://github.com/promptfoo/crabcode" class="btn-github" target="_blank">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+        </svg>
+        View on GitHub
+      </a>
+    </div>
+
+    <div class="scroll-indicator">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M7 13l5 5 5-5M7 6l5 5 5-5"/>
+      </svg>
+    </div>
+  </section>
+
+  <!-- BENTO FEATURES -->
+  <section class="bento-section container">
+    <div class="section-header">
+      <p class="section-label">// Why you need this</p>
+      <h2 class="section-title">Features That Slap</h2>
+    </div>
+
+    <div class="bento-grid">
+      <div class="bento-card large">
+        <div class="icon">⚡</div>
+        <h3>Git Worktrees on Steroids</h3>
+        <p>Spin up isolated workspaces with dedicated branches, ports, and tmux layouts. Context-switch without losing your mind.</p>
+        <div class="terminal-preview">
+          <div><span class="prompt">$</span> <span class="command">crab ws 1</span></div>
+          <div class="output">✓ Created worktree: ~/project-workspaces/ws-1</div>
+          <div class="output">✓ Branch: workspace-1</div>
+          <div class="output">✓ Ports: API=3001, VITE=5174</div>
+          <div class="output">✓ Tmux session ready. <span class="command">You're in. 🦀</span></div>
+        </div>
+      </div>
+
+      <div class="bento-card medium">
+        <div class="icon">🔌</div>
+        <h3>Port Isolation</h3>
+        <p>Auto-detects your .env files and assigns isolated ports per workspace. No more "port already in use" rage.</p>
+      </div>
+
+      <div class="bento-card medium">
+        <div class="icon">💾</div>
+        <h3>WIP Stash</h3>
+        <p>Save work, restart workspace, restore later. Like git stash but for your entire environment state.</p>
+      </div>
+
+      <div class="bento-card medium">
+        <div class="icon">📤</div>
+        <h3>Toolkit Share</h3>
+        <p>Upload files, share via Slack, SSH, email. Local HTTP server with QR code. Maximum flexibility.</p>
+      </div>
+
+      <div class="bento-card large">
+        <div class="icon">💬</div>
+        <h3>Slack Integration</h3>
+        <p>DM teammates, post to channels, read messages—all from your terminal. Never alt-tab again.</p>
+        <div class="terminal-preview">
+          <div><span class="prompt">$</span> <span class="command">crab slack @mike "deploying to prod, hold my beer"</span></div>
+          <div class="output">✓ Sent to @mike</div>
+          <div><span class="prompt">$</span> <span class="command">crab slack #dev "🦀 feature shipped"</span></div>
+          <div class="output">✓ Posted to #dev</div>
+        </div>
+      </div>
+
+      <div class="bento-card half">
+        <div class="icon">🔧</div>
+        <h3>Zero Config Start</h3>
+        <p><code>crab init</code> asks 2 questions. <code>crab config scan</code> auto-detects the rest. You're coding in 60 seconds.</p>
+      </div>
+
+      <div class="bento-card half">
+        <div class="icon">🎯</div>
+        <h3>Shared Volume</h3>
+        <p>Persistent <code>.local/</code> folder survives workspace resets. Your experiments live forever.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- TMUX LAYOUT SHOWCASE -->
+  <section class="layout-section container">
+    <div class="section-header">
+      <p class="section-label">// Your new home</p>
+      <h2 class="section-title">The Perfect Layout</h2>
+    </div>
+
+    <div class="tmux-layout">
+      <div class="tmux-titlebar">
+        <div class="tmux-dot red"></div>
+        <div class="tmux-dot yellow"></div>
+        <div class="tmux-dot green"></div>
+        <span class="tmux-title">crab:workspace-1</span>
+      </div>
+      <div class="tmux-body">
+        <div class="tmux-pane">
+          <span class="pane-label">terminal</span>
+          <div class="pane-content">
+            <span class="active">~/project-ws-1 $</span> <span class="typing"></span><br>
+            <br>
+            Ready to hack.
+          </div>
+        </div>
+        <div class="tmux-pane main">
+          <span class="pane-label">main</span>
+          <div class="pane-content">
+            <span style="color: var(--crab-orange);">claude</span> <span class="active">></span> <br>
+            <br>
+            Your AI pair programmer,<br>
+            standing by. <span class="crab-emoji">🦀</span>
+          </div>
+        </div>
+        <div class="tmux-pane">
+          <span class="pane-label">server</span>
+          <div class="pane-content">
+            <span style="color: var(--terminal-green);">$ pnpm dev</span><br>
+            <br>
+            <span class="active">▸ Ready on localhost:3001</span><br>
+            <span style="color: var(--text-dim);">▸ Watching for changes...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- MANIFESTO -->
+  <section class="manifesto">
+    <div class="container manifesto-content">
+      <h2>
+        Stop <span class="strike">Managing Windows</span><br>
+        Start <span class="green">Shipping</span> <span class="orange">Code</span>
+      </h2>
+
+      <ul class="manifesto-list">
+        <li><span class="check">✓</span> One command to start your entire dev environment</li>
+        <li><span class="check">✓</span> Isolated workspaces that don't step on each other</li>
+        <li><span class="check">✓</span> Git worktrees so you can context-switch instantly</li>
+        <li><span class="check">✓</span> Auto port management (no more conflicts)</li>
+        <li><span class="check">✓</span> Save and restore work-in-progress</li>
+        <li><span class="x">✗</span> Manually starting 5 terminal tabs</li>
+        <li><span class="x">✗</span> "Which branch was I on?"</li>
+        <li><span class="x">✗</span> Port 3000 already in use</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- COMMANDS -->
+  <section class="commands-section container">
+    <div class="section-header">
+      <p class="section-label">// The arsenal</p>
+      <h2 class="section-title">Commands</h2>
+    </div>
+
+    <div class="command-group">
+      <h3>🦀 Workspaces</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab ws new</code>
+          <p>Create next available workspace</p>
+        </div>
+        <div class="command-item">
+          <code>crab ws &lt;N&gt;</code>
+          <p>Open or create workspace N</p>
+        </div>
+        <div class="command-item">
+          <code>crab restart</code>
+          <p>Reset git + restart panes</p>
+        </div>
+        <div class="command-item">
+          <code>crab cleanup</code>
+          <p>Nuke it from orbit, start fresh</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-group">
+      <h3>💾 Work-In-Progress</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab wip save</code>
+          <p>Snapshot your current state</p>
+        </div>
+        <div class="command-item">
+          <code>crab wip --continue</code>
+          <p>Restore most recent WIP</p>
+        </div>
+        <div class="command-item">
+          <code>crab wip --resume</code>
+          <p>Interactive WIP selection</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-group">
+      <h3>📤 Toolkit</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab tk share &lt;path&gt;</code>
+          <p>Upload and get temp URL</p>
+        </div>
+        <div class="command-item">
+          <code>crab tk share --to slack:#channel</code>
+          <p>Share directly to Slack</p>
+        </div>
+        <div class="command-item">
+          <code>crab tk share --serve</code>
+          <p>Local HTTP server + QR code</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-group">
+      <h3>💬 Slack</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab slack @user "msg"</code>
+          <p>Send a DM</p>
+        </div>
+        <div class="command-item">
+          <code>crab slack #channel "msg"</code>
+          <p>Post to channel</p>
+        </div>
+        <div class="command-item">
+          <code>crab slack chat @user</code>
+          <p>Interactive terminal chat</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="container">
+      <div class="footer-crab">🦀</div>
+      <p class="footer-tagline">Built by <a href="https://promptfoo.dev" target="_blank" style="color: var(--crab-orange); text-decoration: none;">promptfoo</a> • The team that makes developer tools that don't suck.</p>
+
+      <div class="footer-links">
+        <a href="https://github.com/promptfoo/crabcode" target="_blank">GitHub</a>
+        <a href="https://github.com/promptfoo/crabcode/issues" target="_blank">Issues</a>
+        <a href="https://github.com/promptfoo/crabcode#readme" target="_blank">Documentation</a>
+        <a href="https://github.com/promptfoo" target="_blank">promptfoo</a>
+        <a href="https://promptfoo.dev" target="_blank">promptfoo.dev</a>
+      </div>
+
+      <p class="footer-copy">MIT License • Built to ship</p>
+    </div>
+  </footer>
+
+  <script>
+    // Copy install command
+    function copyInstall() {
+      const cmd = 'curl -fsSL https://raw.githubusercontent.com/promptfoo/crabcode/main/install.sh | bash';
+      navigator.clipboard.writeText(cmd);
+      const tooltip = document.querySelector('.tooltip');
+      tooltip.textContent = 'Copied!';
+      setTimeout(() => {
+        tooltip.textContent = 'Click to copy';
+      }, 2000);
+    }
+
+    // Konami code easter egg - rain crabs
+    let konamiCode = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
+    let konamiIndex = 0;
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === konamiCode[konamiIndex]) {
+        konamiIndex++;
+        if (konamiIndex === konamiCode.length) {
+          crabRain();
+          konamiIndex = 0;
+        }
+      } else {
+        konamiIndex = 0;
+      }
+    });
+
+    function crabRain() {
+      for (let i = 0; i < 50; i++) {
+        setTimeout(() => {
+          const crab = document.createElement('div');
+          crab.className = 'crab-rain';
+          crab.textContent = '🦀';
+          crab.style.left = Math.random() * 100 + 'vw';
+          crab.style.top = '-50px';
+          crab.style.animationDuration = (Math.random() * 2 + 1) + 's';
+          document.body.appendChild(crab);
+          setTimeout(() => crab.remove(), 3000);
+        }, i * 100);
+      }
+    }
+
+    // Typing effect for terminal
+    const typingElements = document.querySelectorAll('.typing');
+    const commands = ['git status', 'crab restart', 'npm test', 'crab ws 2'];
+    let cmdIndex = 0;
+
+    function typeCommand() {
+      const el = typingElements[0];
+      if (!el) return;
+
+      const cmd = commands[cmdIndex];
+      let charIndex = 0;
+
+      const typeInterval = setInterval(() => {
+        el.textContent = cmd.slice(0, charIndex + 1);
+        charIndex++;
+
+        if (charIndex >= cmd.length) {
+          clearInterval(typeInterval);
+          setTimeout(() => {
+            el.textContent = '';
+            cmdIndex = (cmdIndex + 1) % commands.length;
+            typeCommand();
+          }, 2000);
+        }
+      }, 100);
+    }
+
+    typeCommand();
+  </script>
+</body>
+</html>
