@@ -2200,6 +2200,49 @@ EOF
 # Config Scan - Auto-detect env files and ports
 # =============================================================================
 
+# Helper to extract ports from an env file (bash 3.x compatible)
+_extract_ports_from_file() {
+  local file="$1"
+  local ports=""
+
+  while IFS='=' read -r key value || [ -n "$key" ]; do
+    # Skip comments and empty lines
+    case "$key" in
+      \#*|"") continue ;;
+    esac
+
+    # Clean up key and value
+    key=$(echo "$key" | tr -d '[:space:]')
+    value=$(echo "$value" | tr -d '[:space:]' | tr -d '"' | tr -d "'")
+
+    # Check if it's a port-like variable
+    local is_port=false
+    case "$key" in
+      *[Pp][Oo][Rr][Tt]*) is_port=true ;;
+    esac
+
+    # Check if value looks like a port
+    local port_num=""
+    if echo "$value" | grep -qE '^[0-9]{4,5}$'; then
+      port_num="$value"
+      is_port=true
+    elif echo "$value" | grep -qE ':[0-9]{4,5}'; then
+      port_num=$(echo "$value" | grep -oE ':[0-9]+' | tr -d ':')
+      is_port=true
+    fi
+
+    if [ "$is_port" = true ] && [ -n "$key" ]; then
+      if [ -n "$ports" ]; then
+        ports="$ports $key"
+      else
+        ports="$key"
+      fi
+    fi
+  done < "$file"
+
+  echo "$ports"
+}
+
 config_scan() {
   echo -e "${CYAN}Scanning for .env files...${NC}"
   echo ""
@@ -2217,73 +2260,45 @@ config_scan() {
     return 1
   fi
 
-  # Find all .env and .env.example files
-  local env_files=()
-  local found_files=""
+  # Find all .env and .env.example files (bash 3.x compatible)
+  local env_files=""
+  local file_count=0
 
-  while IFS= read -r -d '' file; do
-    env_files+=("$file")
-  done < <(find "$repo_path" -maxdepth 3 -type f \( -name ".env" -o -name ".env.example" -o -name ".env.local" \) ! -path "*/node_modules/*" ! -path "*/.git/*" -print0 2>/dev/null)
+  while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    env_files="$env_files$file"$'\n'
+    file_count=$((file_count + 1))
+  done < <(find "$repo_path" -maxdepth 3 -type f \( -name ".env" -o -name ".env.example" -o -name ".env.local" \) ! -path "*/node_modules/*" ! -path "*/.git/*" 2>/dev/null)
 
-  if [ ${#env_files[@]} -eq 0 ]; then
+  if [ $file_count -eq 0 ]; then
     echo "  No .env files found in $repo_path"
     echo ""
     echo "  You can manually configure env_sync in $CONFIG_FILE"
     return 0
   fi
 
-  echo -e "Found ${GREEN}${#env_files[@]}${NC} env file(s):"
+  echo -e "Found ${GREEN}${file_count}${NC} env file(s):"
   echo ""
 
-  # Group by directory and analyze
-  declare -A dir_files
-  declare -A dir_ports
+  # Use temp file to store file:ports mappings (bash 3.x compatible)
+  local tmp_file=$(mktemp)
+  trap "rm -f '$tmp_file'" EXIT
 
-  for file in "${env_files[@]}"; do
+  local has_ports=false
+
+  # Process each file
+  echo "$env_files" | while IFS= read -r file; do
+    [ -z "$file" ] && continue
+
     local rel_path="${file#$repo_path/}"
-    local dir_path=$(dirname "$rel_path")
-    local file_name=$(basename "$file")
-
-    # Read file and find port-like variables
-    local ports=()
-    while IFS='=' read -r key value || [ -n "$key" ]; do
-      # Skip comments and empty lines
-      [[ "$key" =~ ^#.*$ ]] && continue
-      [[ -z "$key" ]] && continue
-
-      # Clean up key
-      key=$(echo "$key" | tr -d '[:space:]')
-      value=$(echo "$value" | tr -d '[:space:]' | tr -d '"' | tr -d "'")
-
-      # Check if it's a port-like variable
-      if [[ "$key" =~ [Pp][Oo][Rr][Tt] ]] || [[ "$value" =~ ^[0-9]{4,5}$ ]] || [[ "$value" =~ :[0-9]{4,5} ]]; then
-        # Extract port number
-        local port_num=""
-        if [[ "$value" =~ :([0-9]+) ]]; then
-          port_num="${BASH_REMATCH[1]}"
-        elif [[ "$value" =~ ^([0-9]+)$ ]]; then
-          port_num="${BASH_REMATCH[1]}"
-        fi
-
-        if [ -n "$port_num" ]; then
-          ports+=("$key=$port_num")
-        elif [[ "$key" =~ [Pp][Oo][Rr][Tt] ]]; then
-          ports+=("$key=$value")
-        fi
-      fi
-    done < "$file"
-
-    # Store results
-    if [ "$dir_path" = "." ]; then
-      dir_path="(root)"
-    fi
+    local ports=$(_extract_ports_from_file "$file")
 
     echo -e "  ${BOLD}$rel_path${NC}"
-    if [ ${#ports[@]} -gt 0 ]; then
-      for port in "${ports[@]}"; do
+    if [ -n "$ports" ]; then
+      for port in $ports; do
         echo -e "    └─ ${GREEN}$port${NC}"
       done
-      dir_ports["$rel_path"]="${ports[*]}"
+      echo "$rel_path:$ports" >> "$tmp_file"
     else
       echo "    └─ (no port variables detected)"
     fi
@@ -2291,109 +2306,112 @@ config_scan() {
 
   echo ""
 
-  # Generate suggested config
-  local has_ports=false
-  for key in "${!dir_ports[@]}"; do
-    if [ -n "${dir_ports[$key]}" ]; then
-      has_ports=true
-      break
-    fi
-  done
-
-  if [ "$has_ports" = true ]; then
-    echo -e "${CYAN}Suggested env_sync config:${NC}"
-    echo ""
-    echo "env_sync:"
-    echo "  files:"
-
-    for file in "${env_files[@]}"; do
-      local rel_path="${file#$repo_path/}"
-      local file_name=$(basename "$file")
-
-      # Skip .example files if we have the main .env
-      if [[ "$file_name" == *.example ]]; then
-        local main_file="${file%.example}"
-        if [ -f "$main_file" ]; then
-          continue
-        fi
-        # Use .example path but note it
-        rel_path="${rel_path%.example}"
-      fi
-
-      # Get ports for this file
-      local file_ports="${dir_ports[$rel_path]}"
-      [ -z "$file_ports" ] && file_ports="${dir_ports[${rel_path}.example]}"
-
-      if [ -n "$file_ports" ]; then
-        echo "    - path: $rel_path"
-        echo -n "      ports: ["
-        local first=true
-        for port_entry in $file_ports; do
-          local var_name="${port_entry%%=*}"
-          if [ "$first" = true ]; then
-            echo -n "$var_name"
-            first=false
-          else
-            echo -n ", $var_name"
-          fi
-        done
-        echo "]"
-      fi
-    done
-
-    echo ""
-    read -p "Add this to your config? [y/N]: " confirm
-    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
-      # Check if env_sync already exists
-      if yq -r '.env_sync' "$CONFIG_FILE" 2>/dev/null | grep -q -v "null"; then
-        warn "env_sync already exists in config. Please edit manually."
-        echo "Config file: $CONFIG_FILE"
-      else
-        # Append env_sync to config
-        echo "" >> "$CONFIG_FILE"
-        echo "env_sync:" >> "$CONFIG_FILE"
-        echo "  files:" >> "$CONFIG_FILE"
-
-        for file in "${env_files[@]}"; do
-          local rel_path="${file#$repo_path/}"
-          local file_name=$(basename "$file")
-
-          if [[ "$file_name" == *.example ]]; then
-            local main_file="${file%.example}"
-            if [ -f "$main_file" ]; then
-              continue
-            fi
-            rel_path="${rel_path%.example}"
-          fi
-
-          local file_ports="${dir_ports[$rel_path]}"
-          [ -z "$file_ports" ] && file_ports="${dir_ports[${rel_path}.example]}"
-
-          if [ -n "$file_ports" ]; then
-            echo "    - path: $rel_path" >> "$CONFIG_FILE"
-            echo -n "      ports: [" >> "$CONFIG_FILE"
-            local first=true
-            for port_entry in $file_ports; do
-              local var_name="${port_entry%%=*}"
-              if [ "$first" = true ]; then
-                echo -n "$var_name" >> "$CONFIG_FILE"
-                first=false
-              else
-                echo -n ", $var_name" >> "$CONFIG_FILE"
-              fi
-            done
-            echo "]" >> "$CONFIG_FILE"
-          fi
-        done
-
-        success "Added env_sync config!"
-        echo ""
-        echo "Edit $CONFIG_FILE to customize further."
-      fi
-    fi
-  else
+  # Check if we found any ports
+  if [ ! -s "$tmp_file" ]; then
     echo "No port variables detected. You can manually configure env_sync in:"
     echo "  $CONFIG_FILE"
+    echo ""
+    echo -e "${CYAN}Tip:${NC} Re-run 'crab config scan' anytime your .env files change."
+    return 0
+  fi
+
+  echo -e "${CYAN}Suggested env_sync config:${NC}"
+  echo ""
+  echo "env_sync:"
+  echo "  files:"
+
+  # Build suggestion from temp file
+  local seen_files=""
+  while IFS=':' read -r rel_path ports; do
+    [ -z "$rel_path" ] && continue
+
+    local file_name=$(basename "$rel_path")
+    local display_path="$rel_path"
+
+    # Skip .example files if we have the main .env
+    case "$file_name" in
+      *.example)
+        local main_path="${rel_path%.example}"
+        if echo "$env_files" | grep -q "^$repo_path/$main_path$"; then
+          continue
+        fi
+        display_path="$main_path"
+        ;;
+    esac
+
+    # Skip if we've already shown this path
+    case "$seen_files" in
+      *"$display_path"*) continue ;;
+    esac
+    seen_files="$seen_files $display_path"
+
+    echo "    - path: $display_path"
+    echo -n "      ports: ["
+    local first=true
+    for port in $ports; do
+      if [ "$first" = true ]; then
+        echo -n "$port"
+        first=false
+      else
+        echo -n ", $port"
+      fi
+    done
+    echo "]"
+  done < "$tmp_file"
+
+  echo ""
+  read -p "Add this to your config? [y/N]: " confirm
+  if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+    # Check if env_sync already exists
+    if yq -r '.env_sync' "$CONFIG_FILE" 2>/dev/null | grep -q -v "null"; then
+      warn "env_sync already exists in config. Please edit manually."
+      echo "Config file: $CONFIG_FILE"
+    else
+      # Append env_sync to config
+      echo "" >> "$CONFIG_FILE"
+      echo "env_sync:" >> "$CONFIG_FILE"
+      echo "  files:" >> "$CONFIG_FILE"
+
+      local seen_files=""
+      while IFS=':' read -r rel_path ports; do
+        [ -z "$rel_path" ] && continue
+
+        local file_name=$(basename "$rel_path")
+        local display_path="$rel_path"
+
+        case "$file_name" in
+          *.example)
+            local main_path="${rel_path%.example}"
+            if echo "$env_files" | grep -q "^$repo_path/$main_path$"; then
+              continue
+            fi
+            display_path="$main_path"
+            ;;
+        esac
+
+        case "$seen_files" in
+          *"$display_path"*) continue ;;
+        esac
+        seen_files="$seen_files $display_path"
+
+        echo "    - path: $display_path" >> "$CONFIG_FILE"
+        echo -n "      ports: [" >> "$CONFIG_FILE"
+        local first=true
+        for port in $ports; do
+          if [ "$first" = true ]; then
+            echo -n "$port" >> "$CONFIG_FILE"
+            first=false
+          else
+            echo -n ", $port" >> "$CONFIG_FILE"
+          fi
+        done
+        echo "]" >> "$CONFIG_FILE"
+      done < "$tmp_file"
+
+      success "Added env_sync config!"
+      echo ""
+      echo "Edit $CONFIG_FILE to customize further."
+    fi
   fi
 
   echo ""
