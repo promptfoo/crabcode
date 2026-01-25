@@ -190,6 +190,21 @@ load_config() {
 }
 
 # =============================================================================
+# Tmux Pane Helpers
+# =============================================================================
+
+# Get tmux pane indices based on pane-base-index setting
+# Layout: terminal (top-left), main (right), server (bottom-left)
+# Returns: "terminal_pane:main_pane:server_pane"
+get_pane_indices() {
+  local pane_base=$(tmux show-options -gv pane-base-index 2>/dev/null || echo "0")
+  local p_terminal=$pane_base
+  local p_main=$((pane_base + 1))
+  local p_server=$((pane_base + 2))
+  echo "$p_terminal:$p_main:$p_server"
+}
+
+# =============================================================================
 # Port Management
 # =============================================================================
 
@@ -873,14 +888,22 @@ create_workspace_layout() {
   # ├─────────┤ main    │
   # │ server  │         │
   # └─────────┴─────────┘
+
+  # Get pane indices (handles pane-base-index setting)
+  local pane_indices=$(get_pane_indices)
+  local p_terminal=$(echo "$pane_indices" | cut -d: -f1)
+  local p_main=$(echo "$pane_indices" | cut -d: -f2)
+  local p_server=$(echo "$pane_indices" | cut -d: -f3)
+
+  # Create layout: start with one pane, split right for main, then split left for server
   tmux split-window -h -t "$SESSION_NAME:$window_name" -c "$dir"
-  tmux select-pane -t "$SESSION_NAME:$window_name.1"
+  tmux select-pane -t "$SESSION_NAME:$window_name.$p_terminal"
   tmux split-window -v -t "$SESSION_NAME:$window_name" -c "$dir"
 
-  # Panes: .1=top-left (terminal), .2=bottom-left (server), .3=right (main/claude)
-  [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.2" "echo '$port_msg' && $dev_cmd" C-m
-  [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.3" "$claude_cmd" C-m
-  tmux select-pane -t "$SESSION_NAME:$window_name.3"
+  # After splits: terminal=base, main=base+1, server=base+2
+  [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "echo '$port_msg' && $dev_cmd" C-m
+  [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "$claude_cmd" C-m
+  tmux select-pane -t "$SESSION_NAME:$window_name.$p_main"
 }
 
 # Get command for a pane from config
@@ -1079,18 +1102,24 @@ restart_workspace() {
       dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
     fi
 
+    # Get pane indices
+    local pane_indices=$(get_pane_indices)
+    local p_terminal=$(echo "$pane_indices" | cut -d: -f1)
+    local p_main=$(echo "$pane_indices" | cut -d: -f2)
+    local p_server=$(echo "$pane_indices" | cut -d: -f3)
+
     echo "  Clearing terminal pane..."
-    tmux send-keys -t "$SESSION_NAME:$window_name.1" "clear" C-m
+    tmux send-keys -t "$SESSION_NAME:$window_name.$p_terminal" "clear" C-m
 
     echo "  Restarting server pane..."
-    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.2" -c "$dir"
+    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_server" -c "$dir"
     sleep 0.5
-    [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.2" "clear && $dev_cmd" C-m
+    [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "clear && $dev_cmd" C-m
 
     echo "  Restarting main pane..."
-    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.3" -c "$dir"
+    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
     sleep 0.5
-    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.3" "clear && $claude_cmd" C-m
+    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "clear && $claude_cmd" C-m
 
     success "Workspace $num restarted!"
   else
@@ -1130,13 +1159,18 @@ continue_workspace() {
   if [ -n "$TMUX" ] && tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
     echo "  Window exists, restarting with --continue..."
 
-    tmux send-keys -t "$SESSION_NAME:$window_name.2" C-c
-    sleep 0.3
-    [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.2" "$dev_cmd" C-m
+    # Get pane indices
+    local pane_indices=$(get_pane_indices)
+    local p_main=$(echo "$pane_indices" | cut -d: -f2)
+    local p_server=$(echo "$pane_indices" | cut -d: -f3)
 
-    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.3" -c "$dir"
+    tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" C-c
+    sleep 0.3
+    [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "$dev_cmd" C-m
+
+    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
     sleep 0.5
-    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.3" "clear && $claude_cmd" C-m
+    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "clear && $claude_cmd" C-m
 
     success "Workspace $num continued with previous session"
   else
