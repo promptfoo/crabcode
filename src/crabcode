@@ -3388,6 +3388,18 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  SLACK COMMANDS (crab slack ...)                                              ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab slack @user "msg"       Send DM to a user                               ║
+║  crab slack #channel "msg"    Post to a channel                               ║
+║  crab slack read @user        Show recent DMs with user                       ║
+║  crab slack chat @user        Interactive terminal chat                       ║
+║  crab slack sent              View your sent messages log                     ║
+║  crab slack users             List all workspace users                        ║
+║  crab slack users mike        Search users by name                            ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  OTHER COMMANDS                                                               ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab init             Minimal setup (2 questions)                            ║

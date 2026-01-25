@@ -87,6 +87,30 @@ Options: `--include-git`, `--include-deps`, `--port=8080`
 
 Auto-excludes: `node_modules`, `.git`, `vendor`, `venv`, `dist`, `build`...
 
+### Slack Commands (`crab slack`)
+
+Quick messaging from terminal:
+
+```bash
+crab slack @user "message"       # Send DM
+crab slack #channel "message"    # Post to channel
+crab slack read @user            # View recent messages
+crab slack chat @user            # Interactive terminal chat
+crab slack sent                  # View your sent messages log
+crab slack users                 # List workspace users
+crab slack users mike            # Search by name
+```
+
+**Setup:** Add to `~/.crabcode/config.yaml`:
+
+```yaml
+slack:
+  bot_token: xoxb-your-bot-token
+  display_name: "Your Name"  # optional, defaults to git config
+```
+
+Messages appear with 🦀 icon and show `[Your Name] message` so recipients know who sent it.
+
 ### Config Commands
 
 ```bash
