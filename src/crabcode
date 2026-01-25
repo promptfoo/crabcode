@@ -2209,6 +2209,7 @@ show_init() {
   echo -e "${CYAN}Crabcode Setup${NC}"
   echo ""
 
+  # Check for existing global config
   if config_exists; then
     echo -e "${YELLOW}Config already exists at $CONFIG_FILE${NC}"
     read -p "Overwrite? [y/N]: " confirm
@@ -2216,6 +2217,48 @@ show_init() {
       echo "Cancelled."
       return
     fi
+  fi
+
+  # Check for project-level config in current directory
+  local project_config="$(pwd)/.crabcode.yaml"
+  if [ -f "$project_config" ]; then
+    echo -e "${GREEN}Found project config: .crabcode.yaml${NC}"
+    echo ""
+    echo "This project has a crabcode config. Use it for your global setup?"
+    read -p "  [Y/n]: " use_project
+    if [ "$use_project" != "n" ] && [ "$use_project" != "N" ]; then
+      mkdir -p "$CONFIG_DIR"
+      cp "$project_config" "$CONFIG_FILE"
+
+      # Update paths to absolute if they use relative paths
+      local current_dir=$(pwd)
+
+      # Check if main_repo needs updating (if it's relative or placeholder)
+      local main_repo_val=$(yq -r '.main_repo // ""' "$CONFIG_FILE" 2>/dev/null)
+      if [ -z "$main_repo_val" ] || [ "$main_repo_val" = "null" ] || [[ "$main_repo_val" == "~/"* ]] || [[ "$main_repo_val" == "./"* ]]; then
+        yq -i ".main_repo = \"$current_dir\"" "$CONFIG_FILE"
+        echo -e "  ${YELLOW}Set main_repo to: $current_dir${NC}"
+      fi
+
+      # Check if workspace_base needs updating
+      local ws_base_val=$(yq -r '.workspace_base // ""' "$CONFIG_FILE" 2>/dev/null)
+      if [ -z "$ws_base_val" ] || [ "$ws_base_val" = "null" ]; then
+        local repo_name=$(basename "$current_dir")
+        local default_base="$(dirname "$current_dir")/${repo_name}-workspaces"
+        yq -i ".workspace_base = \"$default_base\"" "$CONFIG_FILE"
+        echo -e "  ${YELLOW}Set workspace_base to: $default_base${NC}"
+      fi
+
+      echo ""
+      success "Config created at $CONFIG_FILE"
+      echo ""
+      echo -e "${CYAN}Next steps:${NC}"
+      echo "  1. Review config: crab config"
+      echo "  2. Run 'crab config scan' if you need to detect ports"
+      echo "  3. Run 'crab ws 1' to create your first workspace"
+      return
+    fi
+    echo ""
   fi
 
   echo "Let's set up crabcode for your project."
