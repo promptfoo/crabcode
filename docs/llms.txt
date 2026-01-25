@@ -1,0 +1,146 @@
+# Crabcode
+
+> Lightning-fast tmux workspace manager for multi-repo development
+
+Crabcode creates isolated development workspaces using git worktrees and tmux. Each workspace gets its own branch, ports, and tmux layout. Switch between tasks instantly without losing context.
+
+## Installation
+
+```bash
+# Prerequisites
+brew install tmux yq zip   # macOS
+# apt install tmux yq zip  # Linux
+
+# Install crabcode
+curl -fsSL https://raw.githubusercontent.com/promptfoo/crabcode/main/install.sh | bash
+```
+
+## Setup
+
+```bash
+cd ~/Dev/my-project
+crab init           # 2 questions: repo path + workspace dir
+crab config scan    # auto-detect .env files and ports
+```
+
+## Usage
+
+### Workspaces
+
+```bash
+crab ws 1              # Open/create workspace 1
+crab ws new            # Create next available workspace
+crab ws                # List all workspaces
+crab restart           # Reset git + restart panes
+crab cleanup           # Full teardown, reset to origin/main
+```
+
+### Save & Restore Work
+
+```bash
+crab wip save          # Save current changes
+crab wip save --restart  # Save then restart workspace
+crab wip --continue    # Restore most recent saved state
+crab wip --resume      # Interactive selection of saved states
+crab wip ls            # List all saved states
+```
+
+### Share Files
+
+```bash
+crab tk share <path>                      # Upload → temp URL
+crab tk share <path> --to slack:#channel  # Share to Slack
+crab tk share <path> --to ssh:user@host   # SSH transfer
+crab tk share <path> --serve              # Local HTTP + QR code
+```
+
+### Slack Integration
+
+```bash
+crab slack @user "message"    # Send DM
+crab slack #channel "message" # Post to channel
+crab slack read @user         # View recent messages
+crab slack chat @user         # Interactive terminal chat
+crab slack sent               # View sent messages log
+```
+
+Requires `slack.bot_token` in `~/.crabcode/config.yaml`.
+
+### Other Commands
+
+```bash
+crab config            # Show current configuration
+crab ports             # Show port usage across workspaces
+crab shared            # Show shared volume info
+crab doctor            # Diagnose issues
+crab cheat             # Show cheat sheet
+```
+
+## Configuration
+
+Config file: `~/.crabcode/config.yaml`
+
+```yaml
+session_name: crab
+workspace_base: ~/Dev/my-project-workspaces
+main_repo: ~/Dev/my-project
+
+# Port isolation (auto-detected by 'crab config scan')
+env_sync:
+  files:
+    - path: server/.env
+      ports: [API_PORT, ADMIN_PORT]
+    - path: app/.env
+      ports: [VITE_PORT]
+
+# Tmux pane layout
+layout:
+  panes:
+    - name: terminal
+      command: ""
+    - name: server
+      command: pnpm dev
+    - name: main
+      command: claude
+
+# Persistent storage across workspace resets
+shared_volume:
+  enabled: true
+  path: ~/.crabcode/shared
+  link_as: .local
+
+# Slack integration
+slack:
+  bot_token: xoxb-your-bot-token
+  display_name: "Your Name"
+```
+
+## Concepts
+
+- **Workspace**: Isolated git worktree with its own branch, ports, and tmux session
+- **WIP**: Save/restore your uncommitted changes across workspace resets
+- **Shared Volume**: A `.local/` folder that persists across resets for experiments
+- **Port Isolation**: Each workspace gets offset ports (ws1: 3001, ws2: 3002, etc.)
+
+## Tmux Layout
+
+```
+┌─────────────────────────┬─────────────────────────┐
+│      terminal           │                         │
+│      (shell)            │        main             │
+├─────────────────────────┤   (claude/editor)       │
+│      server             │                         │
+│      (pnpm dev)         │                         │
+└─────────────────────────┴─────────────────────────┘
+```
+
+Keybindings (prefix: `Ctrl+a`):
+- `Option+1,2,3...` - Switch workspace
+- `Ctrl+a n/p` - Next/prev window
+- `Ctrl+a z` - Toggle zoom
+- `Option+arrows` - Navigate panes
+
+## Links
+
+- Website: https://crabcode.dev
+- GitHub: https://github.com/promptfoo/crabcode
