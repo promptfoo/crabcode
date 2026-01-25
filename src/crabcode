@@ -1860,31 +1860,48 @@ tk_create_archive() {
 tk_upload_transfersh() {
   local file_path="$1"
   local filename=$(basename "$file_path")
+  local filesize=$(du -h "$file_path" | cut -f1)
 
-  echo -e "${CYAN}Uploading to transfer.sh...${NC}"
+  echo -e "${CYAN}Uploading to transfer.sh ($filesize)...${NC}"
 
-  local url=$(curl --progress-bar --upload-file "$file_path" "https://transfer.sh/$filename" 2>/dev/null)
+  # Create temp file for error output
+  local error_file=$(mktemp)
 
-  if [ -n "$url" ]; then
+  # Use -f to fail silently on HTTP errors, capture response
+  local response
+  response=$(curl -f --progress-bar --upload-file "$file_path" "https://transfer.sh/$filename" 2>"$error_file")
+  local curl_exit=$?
+
+  # Read any error output
+  local error_output=$(cat "$error_file" 2>/dev/null)
+  rm -f "$error_file"
+
+  if [ $curl_exit -eq 0 ] && [ -n "$response" ] && [[ "$response" == http* ]]; then
     echo ""
     echo -e "${GREEN}Upload complete!${NC}"
     echo ""
-    echo -e "  URL: ${BOLD}$url${NC}"
+    echo -e "  URL: ${BOLD}$response${NC}"
     echo "  Expires: 14 days"
     echo ""
 
     # Copy to clipboard if possible
     if command_exists pbcopy; then
-      echo -n "$url" | pbcopy
+      echo -n "$response" | pbcopy
       echo "  (Copied to clipboard)"
     elif command_exists xclip; then
-      echo -n "$url" | xclip -selection clipboard
+      echo -n "$response" | xclip -selection clipboard
       echo "  (Copied to clipboard)"
     fi
 
     return 0
   else
-    error "Upload failed"
+    # Show error details for debugging
+    if [ -n "$error_output" ]; then
+      echo -e "${YELLOW}transfer.sh error: $error_output${NC}" >&2
+    fi
+    if [ -n "$response" ] && [[ "$response" != http* ]]; then
+      echo -e "${YELLOW}Unexpected response: $response${NC}" >&2
+    fi
     return 1
   fi
 }
@@ -1892,29 +1909,67 @@ tk_upload_transfersh() {
 # Upload to 0x0.st (alternative service)
 tk_upload_0x0() {
   local file_path="$1"
+  local filesize=$(du -h "$file_path" | cut -f1)
 
-  echo -e "${CYAN}Uploading to 0x0.st...${NC}"
+  echo -e "${CYAN}Uploading to 0x0.st ($filesize)...${NC}"
 
-  local url=$(curl -s -F "file=@$file_path" https://0x0.st 2>/dev/null)
+  # Create temp file for error output
+  local error_file=$(mktemp)
 
-  if [ -n "$url" ] && [[ "$url" == http* ]]; then
+  local response
+  response=$(curl -f -F "file=@$file_path" https://0x0.st 2>"$error_file")
+  local curl_exit=$?
+
+  local error_output=$(cat "$error_file" 2>/dev/null)
+  rm -f "$error_file"
+
+  if [ $curl_exit -eq 0 ] && [ -n "$response" ] && [[ "$response" == http* ]]; then
     echo ""
     echo -e "${GREEN}Upload complete!${NC}"
     echo ""
-    echo -e "  URL: ${BOLD}$url${NC}"
+    echo -e "  URL: ${BOLD}$response${NC}"
     echo ""
 
     # Copy to clipboard
     if command_exists pbcopy; then
-      echo -n "$url" | pbcopy
+      echo -n "$response" | pbcopy
+      echo "  (Copied to clipboard)"
+    elif command_exists xclip; then
+      echo -n "$response" | xclip -selection clipboard
       echo "  (Copied to clipboard)"
     fi
 
     return 0
   else
-    error "Upload failed"
+    if [ -n "$error_output" ]; then
+      echo -e "${YELLOW}0x0.st error: $error_output${NC}" >&2
+    fi
     return 1
   fi
+}
+
+# Upload with automatic fallback between services
+tk_upload_with_fallback() {
+  local file_path="$1"
+
+  # Try transfer.sh first
+  if tk_upload_transfersh "$file_path"; then
+    return 0
+  fi
+
+  echo ""
+  echo -e "${YELLOW}transfer.sh failed, trying 0x0.st...${NC}"
+  echo ""
+
+  # Fallback to 0x0.st
+  if tk_upload_0x0 "$file_path"; then
+    return 0
+  fi
+
+  echo ""
+  error "All upload services failed"
+  echo "Try using SSH transfer instead: crab tk share <path> --to ssh:user@host"
+  return 1
 }
 
 # Transfer via SSH/rsync
@@ -2236,7 +2291,12 @@ handle_tk_share() {
 
   # Handle different destinations
   case "$to" in
-    ""|url|transfer.sh)
+    ""|url)
+      # Default: use auto-fallback between transfer.sh and 0x0.st
+      tk_upload_with_fallback "$file_to_share"
+      ;;
+    transfer.sh)
+      # Explicit transfer.sh (no fallback)
       tk_upload_transfersh "$file_to_share"
       ;;
     0x0|0x0.st)
