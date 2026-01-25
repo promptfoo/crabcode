@@ -583,19 +583,36 @@ init_submodules() {
 
   cd "$dir"
 
+  # Find the main git dir (worktrees share .git/modules with main repo)
+  local git_dir=$(git rev-parse --git-common-dir 2>/dev/null)
+
   for ((i=0; i<submodules_count; i++)); do
     local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
     local reset_to=$(yq -r ".submodules[$i].reset_to" "$CONFIG_FILE" 2>/dev/null)
 
     [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
 
-    echo "  Initializing submodule: $sub_path"
-    git submodule update --init "$sub_path" 2>/dev/null || true
+    # Check if submodule data already exists in main repo
+    local modules_dir="$git_dir/modules/$sub_path"
+    if [ -d "$modules_dir" ]; then
+      # Submodule already fetched - just checkout locally (fast, no network)
+      echo "  Checking out submodule: $sub_path (using cached data)"
+      git submodule update "$sub_path" 2>/dev/null || git submodule update --init "$sub_path" 2>/dev/null || true
+    else
+      # Need to fetch submodule (slow, first time only)
+      echo "  Fetching submodule: $sub_path (first time, may take a moment)"
+      git submodule update --init "$sub_path" 2>/dev/null || true
+    fi
 
+    # Reset to configured ref if specified
     if [ -n "$reset_to" ] && [ "$reset_to" != "null" ] && [ -d "$dir/$sub_path" ]; then
       cd "$dir/$sub_path"
-      git fetch origin --quiet 2>/dev/null || true
-      git checkout main 2>/dev/null || git checkout -b main origin/main 2>/dev/null || true
+      # Only fetch if the ref doesn't exist locally
+      if ! git rev-parse --verify "$reset_to" &>/dev/null; then
+        echo "  Fetching $reset_to for $sub_path..."
+        git fetch origin --quiet 2>/dev/null || true
+      fi
+      git checkout main 2>/dev/null || git checkout -b main 2>/dev/null || true
       git reset --hard "$reset_to" 2>/dev/null || true
       cd "$dir"
     fi
