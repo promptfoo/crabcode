@@ -795,8 +795,119 @@ list_workspaces() {
   if [ "$found" = false ]; then
     echo "  No workspaces found."
     echo ""
-    echo "Run 'crabcode new' or 'crabcode 1' to create a workspace."
+    echo "Run 'crab ws new' or 'crab ws 1' to create a workspace."
   fi
+}
+
+# Interactive workspace menu
+interactive_workspace_menu() {
+  load_config
+
+  if ! config_exists; then
+    echo -e "${YELLOW}No config file found.${NC}"
+    echo ""
+    echo "Run 'crab init' to set up crabcode."
+    return
+  fi
+
+  validate_config
+
+  # Show workspaces
+  echo -e "${CYAN}Crabcode Workspaces${NC}"
+  echo ""
+
+  # Check if main session exists
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo -e "${GREEN}Active session: $SESSION_NAME${NC}"
+    echo "Windows:"
+    tmux list-windows -t "$SESSION_NAME" 2>/dev/null | while read -r line; do
+      echo "  $line"
+    done
+    echo ""
+  else
+    echo -e "${YELLOW}No active $SESSION_NAME session.${NC}"
+    echo ""
+  fi
+
+  # Find all existing workspaces
+  local max_ws=$WORKSPACE_COUNT
+  local existing_workspaces=""
+  for dir in "$WORKSPACE_BASE/$WORKSPACE_PREFIX-"*; do
+    if [ -d "$dir" ]; then
+      local num=$(basename "$dir" | sed "s/${WORKSPACE_PREFIX}-//")
+      if [[ "$num" =~ ^[0-9]+$ ]]; then
+        existing_workspaces="$existing_workspaces $num"
+        [ "$num" -gt "$max_ws" ] && max_ws=$num
+      fi
+    fi
+  done
+
+  echo -e "${YELLOW}Workspaces:${NC}"
+  local found=false
+  for ((i=1; i<=max_ws; i++)); do
+    local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$i"
+    if [ -d "$dir" ]; then
+      found=true
+      local branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "unknown")
+      local api_port=$((API_PORT_BASE + i))
+      local env_port=$(read_env_port "$dir" "api")
+      [ -n "$env_port" ] && api_port="$env_port"
+
+      local status="${YELLOW}[available]${NC}"
+      if tmux has-session -t "$SESSION_NAME" 2>/dev/null && \
+         tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^ws$i$"; then
+        status="${GREEN}[active]${NC}"
+      fi
+      echo -e "  $i: $WORKSPACE_PREFIX-$i ($branch) :$api_port $status"
+    fi
+  done
+
+  if [ "$found" = false ]; then
+    echo "  (none created yet)"
+  fi
+
+  # Show menu
+  echo ""
+  echo -e "${CYAN}Actions:${NC}"
+  echo "  [1-9] Open workspace    [n] New    [r] Restart    [c] Cleanup    [q] Quit"
+  echo ""
+  printf "  > "
+
+  read -r choice
+
+  case "$choice" in
+    q|Q|quit|exit|"")
+      return 0
+      ;;
+    n|N|new)
+      create_new_workspace
+      ;;
+    r|R|restart)
+      echo -n "  Restart which workspace? [1-9]: "
+      read -r ws_num
+      if [[ "$ws_num" =~ ^[0-9]+$ ]]; then
+        restart_workspace "$ws_num"
+      else
+        error "Invalid workspace number"
+      fi
+      ;;
+    c|C|cleanup)
+      echo -n "  Cleanup which workspace? [1-9]: "
+      read -r ws_num
+      if [[ "$ws_num" =~ ^[0-9]+$ ]]; then
+        cleanup_workspace "$ws_num"
+      else
+        error "Invalid workspace number"
+      fi
+      ;;
+    *)
+      if [[ "$choice" =~ ^[0-9]+$ ]]; then
+        open_workspace "$choice"
+      else
+        error "Unknown option: $choice"
+      fi
+      ;;
+  esac
 }
 
 # Open or create workspace
@@ -2670,7 +2781,8 @@ show_cheat() {
 ║                                                                               ║
 ║  WORKSPACE COMMANDS (crab ws ...)                                             ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
-║  crab ws               List all workspaces                                    ║
+║  crab ws               Interactive menu (list + actions)                      ║
+║  crab ws ls            List workspaces (non-interactive)                      ║
 ║  crab ws new           Create next available workspace                        ║
 ║  crab ws <N>           Open/create workspace N                                ║
 ║  crab ws <N> --separate   Open in new terminal window                         ║
@@ -2790,7 +2902,10 @@ handle_ws_command() {
   shift || true
 
   case "$arg" in
-    ""|"ls"|"list")
+    "")
+      interactive_workspace_menu
+      ;;
+    "ls"|"list")
       list_workspaces
       ;;
     "new"|"create")
