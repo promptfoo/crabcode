@@ -39,6 +39,7 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
+GRAY='\033[0;90m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -2393,6 +2394,451 @@ handle_tk_command() {
 }
 
 # =============================================================================
+# Slack Integration
+# =============================================================================
+
+# Get Slack bot token from config
+slack_get_token() {
+  config_get "slack.bot_token" ""
+}
+
+# Get display name for messages (git config or override)
+slack_get_display_name() {
+  local configured=$(config_get "slack.display_name" "")
+  if [ -n "$configured" ] && [ "$configured" != "null" ]; then
+    echo "$configured"
+  else
+    git config user.name 2>/dev/null || whoami
+  fi
+}
+
+# Lookup Slack user ID from @username
+slack_get_user_id() {
+  local username="$1"
+  local token=$(slack_get_token)
+
+  # Remove @ prefix if present
+  username="${username#@}"
+
+  # Get user list and find matching username
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/users.list?limit=500")
+
+  # Extract user ID where name or display_name matches
+  echo "$response" | jq -r --arg name "$username" \
+    '.members[] | select(.name == $name or .profile.display_name == $name or .real_name == $name) | .id' | head -1
+}
+
+# Lookup Slack channel ID from #channel
+slack_get_channel_id() {
+  local channel="$1"
+  local token=$(slack_get_token)
+
+  # Remove # prefix if present
+  channel="${channel#\#}"
+
+  # Get channel list
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/conversations.list?types=public_channel,private_channel&limit=500")
+
+  echo "$response" | jq -r --arg name "$channel" \
+    '.channels[] | select(.name == $name) | .id' | head -1
+}
+
+# Open a DM channel with a user
+slack_open_dm() {
+  local user_id="$1"
+  local token=$(slack_get_token)
+
+  local response=$(curl -s -X POST -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d "{\"users\":\"$user_id\"}" \
+    "https://slack.com/api/conversations.open")
+
+  echo "$response" | jq -r '.channel.id'
+}
+
+# Send a message to Slack
+slack_post_message() {
+  local channel_id="$1"
+  local message="$2"
+  local token=$(slack_get_token)
+  local display_name=$(slack_get_display_name)
+
+  # Format: 🦀 [Name] message - with crab icon as bot avatar
+  local full_message="*[$display_name]* $message"
+
+  local response=$(curl -s -X POST -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n \
+      --arg channel "$channel_id" \
+      --arg text "$full_message" \
+      --arg username "crab ($display_name)" \
+      '{channel: $channel, text: $text, icon_emoji: ":crab:", username: $username}')" \
+    "https://slack.com/api/chat.postMessage")
+
+  local ok=$(echo "$response" | jq -r '.ok')
+  if [ "$ok" = "true" ]; then
+    return 0
+  else
+    local err=$(echo "$response" | jq -r '.error')
+    error "Slack API error: $err"
+    return 1
+  fi
+}
+
+# Read message history from a channel/DM
+slack_read_history() {
+  local channel_id="$1"
+  local limit="${2:-10}"
+  local token=$(slack_get_token)
+
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/conversations.history?channel=$channel_id&limit=$limit")
+
+  local ok=$(echo "$response" | jq -r '.ok')
+  if [ "$ok" != "true" ]; then
+    local err=$(echo "$response" | jq -r '.error')
+    error "Failed to read history: $err"
+    return 1
+  fi
+
+  # Parse and display messages (oldest first)
+  echo "$response" | jq -r '.messages | reverse | .[] |
+    "\(.ts | tonumber | strftime("%H:%M")) \(.user // "bot"): \(.text)"' 2>/dev/null
+}
+
+# Get username from user ID (for display)
+slack_get_username() {
+  local user_id="$1"
+  local token=$(slack_get_token)
+
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/users.info?user=$user_id")
+
+  echo "$response" | jq -r '.user.profile.display_name // .user.real_name // .user.name'
+}
+
+# Cache for user ID to name mapping (file-based for bash 3.x compatibility)
+SLACK_USER_CACHE_DIR="/tmp/crab-slack-cache-$$"
+
+slack_get_username_cached() {
+  local user_id="$1"
+  local cache_file="$SLACK_USER_CACHE_DIR/$user_id"
+
+  mkdir -p "$SLACK_USER_CACHE_DIR" 2>/dev/null
+
+  if [ -f "$cache_file" ]; then
+    cat "$cache_file"
+  else
+    local name=$(slack_get_username "$user_id")
+    echo "$name" > "$cache_file"
+    echo "$name"
+  fi
+}
+
+# Format and display messages with usernames
+slack_display_messages() {
+  local channel_id="$1"
+  local limit="${2:-10}"
+  local token=$(slack_get_token)
+
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/conversations.history?channel=$channel_id&limit=$limit")
+
+  local ok=$(echo "$response" | jq -r '.ok')
+  if [ "$ok" != "true" ]; then
+    return 1
+  fi
+
+  # Get messages as JSON array (reversed for chronological order)
+  local messages=$(echo "$response" | jq -c '.messages | reverse | .[]')
+
+  while IFS= read -r msg; do
+    local ts=$(echo "$msg" | jq -r '.ts | tonumber | strftime("%H:%M")')
+    local user_id=$(echo "$msg" | jq -r '.user // empty')
+    local text=$(echo "$msg" | jq -r '.text')
+    local bot_name=$(echo "$msg" | jq -r '.bot_profile.name // empty')
+
+    local sender
+    if [ -n "$bot_name" ]; then
+      sender="$bot_name"
+    elif [ -n "$user_id" ]; then
+      sender=$(slack_get_username_cached "$user_id")
+    else
+      sender="unknown"
+    fi
+
+    echo -e "${GRAY}[$ts]${NC} ${CYAN}$sender${NC}: $text"
+  done <<< "$messages"
+}
+
+# Interactive chat mode
+slack_chat() {
+  local target="$1"
+  local token=$(slack_get_token)
+
+  if [ -z "$token" ]; then
+    error "Slack not configured. Add bot_token to ~/.crabcode/config.yaml"
+    return 1
+  fi
+
+  # Resolve target to channel ID
+  local channel_id
+  local target_name
+
+  if [[ "$target" == "#"* ]]; then
+    target_name="${target#\#}"
+    channel_id=$(slack_get_channel_id "$target_name")
+    if [ -z "$channel_id" ]; then
+      error "Channel not found: $target"
+      return 1
+    fi
+  elif [[ "$target" == "@"* ]]; then
+    target_name="${target#@}"
+    local user_id=$(slack_get_user_id "$target_name")
+    if [ -z "$user_id" ]; then
+      error "User not found: $target"
+      return 1
+    fi
+    channel_id=$(slack_open_dm "$user_id")
+    if [ -z "$channel_id" ] || [ "$channel_id" = "null" ]; then
+      error "Failed to open DM with $target"
+      return 1
+    fi
+  else
+    error "Target must start with @ (user) or # (channel)"
+    return 1
+  fi
+
+  # Display chat header
+  echo ""
+  echo -e "${CYAN}━━ Chat with $target ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${GRAY}Type messages and press Enter. Ctrl+C to exit.${NC}"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+
+  # Show recent history
+  slack_display_messages "$channel_id" 10
+
+  echo ""
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  # Chat loop
+  local last_check=$(date +%s)
+
+  while true; do
+    # Non-blocking read with timeout for polling
+    echo -ne "${GREEN}>${NC} "
+
+    if read -t 5 -r message; then
+      if [ -n "$message" ]; then
+        if slack_post_message "$channel_id" "$message"; then
+          echo -e "${GRAY}[sent]${NC}"
+        fi
+      fi
+    fi
+
+    # Poll for new messages every 5 seconds
+    local now=$(date +%s)
+    if [ $((now - last_check)) -ge 5 ]; then
+      # Check for new messages (would need to track last seen timestamp for proper implementation)
+      last_check=$now
+    fi
+  done
+}
+
+# Quick send message
+slack_send() {
+  local target="$1"
+  local message="$2"
+  local token=$(slack_get_token)
+
+  if [ -z "$token" ]; then
+    error "Slack not configured. Add bot_token to ~/.crabcode/config.yaml"
+    return 1
+  fi
+
+  if [ -z "$target" ] || [ -z "$message" ]; then
+    error "Usage: crab slack @user \"message\" or crab slack #channel \"message\""
+    return 1
+  fi
+
+  # Resolve target to channel ID
+  local channel_id
+
+  if [[ "$target" == "#"* ]]; then
+    local channel_name="${target#\#}"
+    channel_id=$(slack_get_channel_id "$channel_name")
+    if [ -z "$channel_id" ]; then
+      error "Channel not found: $target"
+      return 1
+    fi
+  elif [[ "$target" == "@"* ]]; then
+    local username="${target#@}"
+    local user_id=$(slack_get_user_id "$username")
+    if [ -z "$user_id" ]; then
+      error "User not found: $target"
+      return 1
+    fi
+    channel_id=$(slack_open_dm "$user_id")
+    if [ -z "$channel_id" ] || [ "$channel_id" = "null" ]; then
+      error "Failed to open DM with $target"
+      return 1
+    fi
+  else
+    error "Target must start with @ (user) or # (channel)"
+    return 1
+  fi
+
+  if slack_post_message "$channel_id" "$message"; then
+    success "Message sent to $target"
+  fi
+}
+
+# Read recent messages from a conversation
+slack_read() {
+  local target="$1"
+  local limit="${2:-10}"
+  local token=$(slack_get_token)
+
+  if [ -z "$token" ]; then
+    error "Slack not configured. Add bot_token to ~/.crabcode/config.yaml"
+    return 1
+  fi
+
+  if [ -z "$target" ]; then
+    error "Usage: crab slack read @user [count]"
+    return 1
+  fi
+
+  # Resolve target to channel ID
+  local channel_id
+  local target_name
+
+  if [[ "$target" == "#"* ]]; then
+    target_name="${target#\#}"
+    channel_id=$(slack_get_channel_id "$target_name")
+    if [ -z "$channel_id" ]; then
+      error "Channel not found: $target"
+      return 1
+    fi
+  elif [[ "$target" == "@"* ]]; then
+    target_name="${target#@}"
+    local user_id=$(slack_get_user_id "$target_name")
+    if [ -z "$user_id" ]; then
+      error "User not found: $target"
+      return 1
+    fi
+    channel_id=$(slack_open_dm "$user_id")
+    if [ -z "$channel_id" ] || [ "$channel_id" = "null" ]; then
+      error "Failed to open DM with $target"
+      return 1
+    fi
+  else
+    error "Target must start with @ (user) or # (channel)"
+    return 1
+  fi
+
+  echo ""
+  echo -e "${CYAN}━━ Messages with $target ━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  slack_display_messages "$channel_id" "$limit"
+  echo ""
+}
+
+# List available users
+slack_list_users() {
+  local token=$(slack_get_token)
+  local filter="${1:-}"
+
+  echo -e "${CYAN}Slack Users:${NC}"
+  echo ""
+
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/users.list?limit=200")
+
+  if [ -n "$filter" ]; then
+    echo "$response" | jq -r --arg filter "$filter" \
+      '.members[] | select(.deleted == false and .is_bot == false) | select(.name | contains($filter)) | "  @\(.name)  \(.profile.display_name // .real_name // "-")"'
+  else
+    echo "$response" | jq -r \
+      '.members[] | select(.deleted == false and .is_bot == false) | "  @\(.name)  \(.profile.display_name // .real_name // "-")"'
+  fi
+}
+
+# Handle slack command
+handle_slack_command() {
+  local first="${1:-}"
+
+  if [ -z "$first" ]; then
+    show_slack_help
+    return
+  fi
+
+  case "$first" in
+    "chat")
+      shift
+      slack_chat "$@"
+      ;;
+    "read"|"history")
+      shift
+      slack_read "$@"
+      ;;
+    "users"|"list")
+      shift
+      slack_list_users "$@"
+      ;;
+    "help"|"-h"|"--help")
+      show_slack_help
+      ;;
+    "@"*|"#"*)
+      # Quick send: crab slack @user "message" or crab slack #channel "message"
+      local target="$1"
+      shift
+      local message="$*"
+      slack_send "$target" "$message"
+      ;;
+    *)
+      error "Unknown slack command: $first"
+      show_slack_help
+      return 1
+      ;;
+  esac
+}
+
+show_slack_help() {
+  echo -e "${CYAN}Slack Commands${NC}"
+  echo ""
+  echo "Quick send:"
+  echo "  crab slack @user \"message\"      Send DM to a user"
+  echo "  crab slack #channel \"message\"   Post to a channel"
+  echo ""
+  echo "Read messages:"
+  echo "  crab slack read @user           Show recent DMs with user"
+  echo "  crab slack read #channel        Show recent channel messages"
+  echo "  crab slack read @user 20        Show last 20 messages"
+  echo ""
+  echo "Interactive chat:"
+  echo "  crab slack chat @user           Open chat session with user"
+  echo "  crab slack chat #channel        Open chat session in channel"
+  echo ""
+  echo "Utilities:"
+  echo "  crab slack users                List all users"
+  echo "  crab slack users mike           Search users by name"
+  echo ""
+  echo "Examples:"
+  echo "  crab slack @michael \"hey, can you review my PR?\""
+  echo "  crab slack read @michael"
+  echo "  crab slack chat @michael"
+  echo ""
+  echo "Configuration (~/.crabcode/config.yaml):"
+  echo "  slack:"
+  echo "    bot_token: xoxb-your-token"
+  echo "    display_name: \"Your Name\"  # optional, defaults to git config"
+}
+
+# =============================================================================
 # Init / Config / Doctor
 # =============================================================================
 
@@ -3106,6 +3552,9 @@ main() {
       ;;
     "tk"|"toolkit")
       handle_tk_command "${@:2}"
+      ;;
+    "slack")
+      handle_slack_command "${@:2}"
       ;;
     "new"|"create")
       # Shorthand: crab new -> crab ws new
