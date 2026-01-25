@@ -199,8 +199,8 @@ load_config() {
 get_pane_indices() {
   local pane_base=$(tmux show-options -gv pane-base-index 2>/dev/null || echo "0")
   local p_terminal=$pane_base
-  local p_main=$((pane_base + 1))
-  local p_server=$((pane_base + 2))
+  local p_server=$((pane_base + 1))
+  local p_main=$((pane_base + 2))
   echo "$p_terminal:$p_main:$p_server"
 }
 
