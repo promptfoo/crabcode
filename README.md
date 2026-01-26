@@ -59,16 +59,24 @@ crab continue            # Continue current workspace
 
 ### WIP Commands (`crab wip`)
 
-Save and restore work across workspace resets:
+Save and restore work across workspace resets. WIPs are stored globally with rich metadata:
 
 ```bash
 crab wip save            # Save current changes
 crab wip save --restart  # Save then restart
-crab wip ls              # List saved WIP states
-crab wip --continue      # Restore most recent WIP
-crab wip --resume        # Interactive WIP selection
+crab wip ls              # List all WIPs globally with metadata
+crab wip restore         # Interactive restore from all WIPs
+crab wip restore <N>     # Restore WIP #N to original workspace
+crab wip restore <N> --to <ws>  # Restore to different workspace
+crab wip --continue      # Restore most recent WIP (current workspace)
 crab wip delete <name>   # Delete a WIP state
 ```
+
+The global WIP list shows:
+- Summary (AI-generated from your changes)
+- Workspace number, branch, file count
+- Commits ahead of origin/main
+- Timestamp
 
 ### Toolkit Commands (`crab tk`)
 
