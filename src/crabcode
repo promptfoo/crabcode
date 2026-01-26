@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -3828,6 +3828,7 @@ show_cheat() {
 ║  crab doctor           Diagnose common issues                                 ║
 ║  crab ports            Show port usage across workspaces                      ║
 ║  crab shared           Show shared volume info                                ║
+║  crab update           Update crabcode to latest version                      ║
 ║  crab cheat            Show this cheat sheet                                  ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -4182,6 +4183,30 @@ main() {
           echo "  Restores: branch, commits, staged/unstaged changes, submodules"
           ;;
       esac
+      ;;
+    "update"|"upgrade")
+      # Self-update from GitHub
+      echo -e "${CYAN}Updating crabcode...${NC}"
+      local install_dir=$(dirname "$(realpath "$0")")
+      local tmp_file="/tmp/crabcode-update-$$"
+
+      if curl -fsSL "https://raw.githubusercontent.com/promptfoo/crabcode/main/src/crabcode" -o "$tmp_file" 2>/dev/null; then
+        local new_version=$(grep '^VERSION=' "$tmp_file" | cut -d'"' -f2)
+        local current_version="$VERSION"
+
+        if [ "$new_version" = "$current_version" ]; then
+          echo -e "${GREEN}Already up to date (v$VERSION)${NC}"
+        else
+          chmod +x "$tmp_file"
+          mv "$tmp_file" "$install_dir/crabcode"
+          echo -e "${GREEN}Updated: v$current_version → v$new_version${NC}"
+        fi
+      else
+        error "Failed to download update"
+        rm -f "$tmp_file"
+        exit 1
+      fi
+      rm -f "$tmp_file"
       ;;
     "--version"|"-v")
       echo "crabcode v$VERSION"
