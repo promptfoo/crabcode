@@ -2578,9 +2578,13 @@ slack_get_latest_ts() {
   local channel_id="$1"
   local token=$(slack_get_token)
 
-  curl -s -H "Authorization: Bearer $token" \
-    "https://slack.com/api/conversations.history?channel=$channel_id&limit=1" \
-    | jq -r '.messages[0].ts // "0"'
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/conversations.history?channel=$channel_id&limit=1")
+  local ok=$(echo "$response" | jq -r '.ok')
+  if [ "$ok" != "true" ]; then
+    return 1
+  fi
+  echo "$response" | jq -r '.messages[0].ts // "0"'
 }
 
 # Poll for new messages since a given timestamp
@@ -2589,9 +2593,9 @@ slack_poll_new_messages() {
   local since_ts="$2"
   local token=$(slack_get_token)
 
-  # Get messages newer than since_ts
+  # Get messages newer than since_ts (limit=100 to handle busy channels)
   local response=$(curl -s -H "Authorization: Bearer $token" \
-    "https://slack.com/api/conversations.history?channel=$channel_id&oldest=$since_ts&limit=20")
+    "https://slack.com/api/conversations.history?channel=$channel_id&oldest=$since_ts&limit=100")
 
   local ok=$(echo "$response" | jq -r '.ok')
   if [ "$ok" != "true" ]; then
@@ -2655,7 +2659,10 @@ slack_chat() {
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
   # Get latest message timestamp for polling baseline
-  local last_ts=$(slack_get_latest_ts "$channel_id")
+  local last_ts
+  if ! last_ts=$(slack_get_latest_ts "$channel_id"); then
+    last_ts="0"
+  fi
 
   # Chat loop
   local last_check=$(date +%s)
@@ -2668,8 +2675,8 @@ slack_chat() {
       if [ -n "$message" ]; then
         if slack_post_message "$channel_id" "$message"; then
           echo -e "${GRAY}[sent]${NC}"
-          # Update last_ts to avoid re-displaying our own message
-          last_ts=$(slack_get_latest_ts "$channel_id")
+          # Note: last_ts is updated when polling new messages to avoid skipping any
+          # messages that arrive between send and the next poll
         fi
       fi
     fi
@@ -2680,15 +2687,22 @@ slack_chat() {
       # Clear the prompt line before showing new messages
       echo -ne "\r\033[K"
 
-      # Poll for new messages
-      local new_messages=$(slack_poll_new_messages "$channel_id" "$last_ts")
+      # Poll for new messages (handle errors gracefully to avoid crashing chat loop)
+      local new_messages=""
+      if ! new_messages=$(slack_poll_new_messages "$channel_id" "$last_ts"); then
+        # Transient API error (e.g., rate limiting) - skip this poll cycle
+        last_check=$now
+        continue
+      fi
 
       if [ -n "$new_messages" ]; then
         while IFS= read -r msg; do
           local ts=$(echo "$msg" | jq -r '.ts')
           local time=$(echo "$msg" | jq -r '.ts | tonumber | strftime("%H:%M")')
           local user_id=$(echo "$msg" | jq -r '.user // empty')
-          local text=$(echo "$msg" | jq -r '.text')
+          # Sanitize text to prevent terminal escape sequence injection
+          # Remove CSI sequences (\033[...X), OSC sequences (\033]...\007), then control chars
+          local text=$(echo "$msg" | jq -r '.text' | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g; s/\033\\][^\007]*\007//g' | tr -d '\000-\010\013\014\016-\037')
           local bot_name=$(echo "$msg" | jq -r '.bot_profile.name // empty')
 
           local sender
