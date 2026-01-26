@@ -156,12 +156,49 @@ chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 echo "Creating 'crab' alias..."
 ln -sf "$INSTALL_DIR/$SCRIPT_NAME" "$INSTALL_DIR/$ALIAS_NAME"
 
+# Add to PATH if needed
+add_to_path() {
+  local shell_profile=""
+  local export_line="export PATH=\"\$PATH:$INSTALL_DIR\""
+
+  # Detect shell and profile file
+  case "$SHELL" in
+    */zsh)
+      shell_profile="$HOME/.zshrc"
+      ;;
+    */bash)
+      if [[ -f "$HOME/.bash_profile" ]]; then
+        shell_profile="$HOME/.bash_profile"
+      else
+        shell_profile="$HOME/.bashrc"
+      fi
+      ;;
+    *)
+      # Default to .profile for other shells
+      shell_profile="$HOME/.profile"
+      ;;
+  esac
+
+  # Check if already in the profile
+  if [[ -f "$shell_profile" ]] && grep -q "$INSTALL_DIR" "$shell_profile" 2>/dev/null; then
+    echo -e "${GREEN}PATH already configured in $shell_profile${NC}"
+    return 0
+  fi
+
+  # Add to profile
+  echo "" >> "$shell_profile"
+  echo "# Added by crabcode installer" >> "$shell_profile"
+  echo "$export_line" >> "$shell_profile"
+
+  echo -e "${GREEN}Added $INSTALL_DIR to PATH in $shell_profile${NC}"
+  echo -e "${YELLOW}Run 'source $shell_profile' or open a new terminal to use crab${NC}"
+}
+
 # Check if install directory is in PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-  echo -e "${YELLOW}Note: $INSTALL_DIR is not in your PATH.${NC}"
-  echo "Add this to your shell profile (.bashrc, .zshrc, etc.):"
   echo ""
-  echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
+  echo -e "${YELLOW}$INSTALL_DIR is not in your PATH.${NC}"
+  add_to_path
   echo ""
 fi
 
@@ -170,7 +207,8 @@ echo ""
 echo "You can use either 'crabcode' or 'crab' command."
 echo ""
 echo "Next steps:"
-echo "  1. Run 'crab init' to create your config"
-echo "  2. Run 'crab ws 1' to start your first workspace"
+echo "  1. Run 'source ~/.zshrc' (or open new terminal)"
+echo "  2. Run 'crab init' to create your config"
+echo "  3. Run 'crab ws 1' to start your first workspace"
 echo ""
 echo "Run 'crab cheat' for a quick reference."
