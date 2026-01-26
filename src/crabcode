@@ -1741,6 +1741,7 @@ wip_list_global() {
 # Interactive restore from global WIP list
 wip_restore_global() {
   local target_ws="${1:-}"
+  local open_after="${2:-false}"
 
   if [ ! -d "$WIP_BASE" ]; then
     error "No WIP states found"
@@ -1839,13 +1840,14 @@ wip_restore_global() {
   echo ""
   echo -e "${CYAN}Restoring WIP: $wip_name -> workspace $restore_to_ws${NC}"
 
-  _restore_wip "$restore_to_ws" "$selected_wip"
+  _restore_wip "$restore_to_ws" "$selected_wip" "$open_after"
 }
 
 # Restore by index from global list
 wip_restore_by_index() {
   local index="$1"
   local target_ws="$2"
+  local open_after="${3:-false}"
 
   if [ ! -d "$WIP_BASE" ]; then
     error "No WIP states found"
@@ -1911,11 +1913,12 @@ wip_restore_by_index() {
   local wip_name=$(basename "$selected_wip")
   echo -e "${CYAN}Restoring WIP: $wip_name -> workspace $restore_to_ws${NC}"
 
-  _restore_wip "$restore_to_ws" "$selected_wip"
+  _restore_wip "$restore_to_ws" "$selected_wip" "$open_after"
 }
 
 wip_continue() {
   local num=$1
+  local open_after="${2:-false}"
   local wip_dir=$(get_wip_dir "$num")
 
   if [ ! -d "$wip_dir" ]; then
@@ -1933,7 +1936,7 @@ wip_continue() {
   local wip_name=$(basename "$latest_wip")
   echo -e "${CYAN}Restoring WIP: $wip_name${NC}"
 
-  _restore_wip "$num" "$latest_wip"
+  _restore_wip "$num" "$latest_wip" "$open_after"
 }
 
 wip_resume() {
@@ -1998,6 +2001,7 @@ wip_resume() {
 _restore_wip() {
   local num=$1
   local wip_path=$2
+  local open_after="${3:-false}"
   local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
   local wip_name=$(basename "$wip_path")
   local branch_name=$(get_branch_name "$num")
@@ -2018,10 +2022,40 @@ _restore_wip() {
 
   cd "$dir"
 
+  # Switch to saved branch
   local current_branch=$(git branch --show-current)
   if [ "$current_branch" != "$saved_branch" ] && [ -n "$saved_branch" ]; then
     echo "  Switching to branch $saved_branch..."
     git checkout "$saved_branch" 2>/dev/null || git checkout -b "$saved_branch"
+  fi
+
+  # Cherry-pick saved commits (handle both main-commits.txt and cloud-commits.txt)
+  local commits_file=""
+  if [ -f "$wip_path/main-commits.txt" ] && [ -s "$wip_path/main-commits.txt" ]; then
+    commits_file="$wip_path/main-commits.txt"
+  elif [ -f "$wip_path/cloud-commits.txt" ] && [ -s "$wip_path/cloud-commits.txt" ]; then
+    commits_file="$wip_path/cloud-commits.txt"
+  fi
+
+  if [ -n "$commits_file" ]; then
+    echo "  Restoring commits..."
+    # Read commit hashes in reverse order (oldest first) and cherry-pick
+    local commit_hashes=$(awk '{print $1}' "$commits_file" | tac)
+    local cherry_pick_failed=false
+    for hash in $commit_hashes; do
+      if git cat-file -e "$hash" 2>/dev/null; then
+        if ! git cherry-pick "$hash" --no-commit 2>/dev/null; then
+          echo "    (commit $hash may need manual resolution)"
+          cherry_pick_failed=true
+        fi
+      else
+        echo "    (commit $hash not found in repo - may need to fetch)"
+      fi
+    done
+    if [ "$cherry_pick_failed" = "false" ] && [ -n "$commit_hashes" ]; then
+      # Commit the cherry-picked changes
+      git commit --no-edit 2>/dev/null || true
+    fi
   fi
 
   # Apply main patches
@@ -2045,6 +2079,42 @@ _restore_wip() {
       cd "$dir/$sub_path"
       local safe_name=$(echo "$sub_path" | tr '/' '-')
 
+      # Check for saved submodule branch in metadata
+      local sub_branch=""
+      if [ -f "$metadata" ]; then
+        sub_branch=$(grep -o "\"${safe_name}_branch\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$metadata" | sed "s/\"${safe_name}_branch\"[[:space:]]*:[[:space:]]*\"//" | sed 's/"$//')
+        # Also try promptfoo_branch for backwards compatibility
+        if [ -z "$sub_branch" ] && [ "$sub_path" = "promptfoo" ]; then
+          sub_branch=$(grep -o '"promptfoo_branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"promptfoo_branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+        fi
+      fi
+
+      # Switch submodule to saved branch if specified
+      if [ -n "$sub_branch" ] && [ "$sub_branch" != "null" ]; then
+        local current_sub_branch=$(git branch --show-current 2>/dev/null)
+        if [ "$current_sub_branch" != "$sub_branch" ]; then
+          echo "  Switching $sub_path to branch $sub_branch..."
+          git checkout "$sub_branch" 2>/dev/null || git checkout -b "$sub_branch" 2>/dev/null || true
+        fi
+      fi
+
+      # Cherry-pick submodule commits
+      local sub_commits_file=""
+      if [ -f "$wip_path/${safe_name}-commits.txt" ] && [ -s "$wip_path/${safe_name}-commits.txt" ]; then
+        sub_commits_file="$wip_path/${safe_name}-commits.txt"
+      fi
+
+      if [ -n "$sub_commits_file" ]; then
+        echo "  Restoring $sub_path commits..."
+        local sub_hashes=$(awk '{print $1}' "$sub_commits_file" | tac)
+        for hash in $sub_hashes; do
+          if git cat-file -e "$hash" 2>/dev/null; then
+            git cherry-pick "$hash" --no-commit 2>/dev/null || echo "    (commit $hash may need manual resolution)"
+          fi
+        done
+        git commit --no-edit 2>/dev/null || true
+      fi
+
       if [ -f "$wip_path/${safe_name}-staged.patch" ] && [ -s "$wip_path/${safe_name}-staged.patch" ]; then
         echo "  Applying $sub_path staged changes..."
         git apply "$wip_path/${safe_name}-staged.patch" 2>/dev/null && git add -A || echo "    (some hunks may have failed)"
@@ -2060,9 +2130,16 @@ _restore_wip() {
   done
 
   success "WIP restored: $wip_name"
-  echo ""
-  echo "  Run 'crabcode $num' to open the workspace"
-  echo "  Or 'crabcode continue' to resume with --continue"
+
+  if [ "$open_after" = "true" ]; then
+    echo ""
+    echo "  Opening workspace $num..."
+    open_workspace "$num"
+  else
+    echo ""
+    echo "  Run 'crab $num' to open the workspace"
+    echo "  Or 'crab wip restore <N> --open' to restore and open"
+  fi
 }
 
 wip_delete() {
@@ -3671,12 +3748,13 @@ show_cheat() {
 ║                                                                               ║
 ║  WIP COMMANDS (crab wip ...)                                                  ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
-║  crab wip save              Save current changes                              ║
+║  crab wip save              Save current changes (branch, commits, patches)   ║
 ║  crab wip save --restart    Save then restart workspace                       ║
 ║  crab wip ls                List all WIPs globally with metadata              ║
 ║  crab wip restore           Interactive restore from all WIPs                 ║
 ║  crab wip restore <N>       Restore WIP #N to original workspace              ║
 ║  crab wip restore <N> --to <ws>  Restore to different workspace               ║
+║  crab wip restore <N> --open     Restore and open workspace with claude       ║
 ║  crab wip --continue        Restore most recent WIP (current workspace)       ║
 ║  crab wip delete <name>     Delete a saved WIP state                          ║
 ║                                                                               ║
@@ -3986,20 +4064,39 @@ main() {
           fi
           ;;
         "restore")
-          # Restore by index with optional target workspace
+          # Restore by index with optional target workspace and --open flag
+          # Usage: crab wip restore [<N>] [--to <ws>] [--open]
           local target_ws=""
-          local index="${3:-}"
+          local index=""
+          local open_after="false"
+          shift 2  # Remove "wip" and "restore"
 
-          # Parse --to flag
-          if [ "${4:-}" = "--to" ] && [ -n "${5:-}" ]; then
-            target_ws="${5}"
-          fi
+          # Parse arguments
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --to)
+                target_ws="${2:-}"
+                shift 2
+                ;;
+              --open|-o)
+                open_after="true"
+                shift
+                ;;
+              *)
+                # First non-flag argument is the index
+                if [ -z "$index" ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+                  index="$1"
+                fi
+                shift
+                ;;
+            esac
+          done
 
           if [ -z "$index" ]; then
             # Interactive restore
-            wip_restore_global "$target_ws"
+            wip_restore_global "$target_ws" "$open_after"
           else
-            wip_restore_by_index "$index" "$target_ws"
+            wip_restore_by_index "$index" "$target_ws" "$open_after"
           fi
           ;;
         "--continue"|"-c")
@@ -4007,7 +4104,12 @@ main() {
             error "Not in a workspace directory. Use: crab wip restore"
             exit 1
           fi
-          wip_continue "$num"
+          # Check for --open flag
+          local open_flag="false"
+          if [ "${3:-}" = "--open" ] || [ "${3:-}" = "-o" ]; then
+            open_flag="true"
+          fi
+          wip_continue "$num" "$open_flag"
           ;;
         "--resume"|"-r"|"resume")
           if [ -z "$num" ]; then
@@ -4041,6 +4143,9 @@ main() {
           echo "    crab wip restore           Interactive restore from all WIPs"
           echo "    crab wip restore <N>       Restore WIP #N to its original workspace"
           echo "    crab wip restore <N> --to <ws>  Restore WIP #N to workspace <ws>"
+          echo "    crab wip restore <N> --open     Restore and open workspace"
+          echo ""
+          echo "  Restores: branch, commits, staged/unstaged changes, submodules"
           ;;
       esac
       ;;
