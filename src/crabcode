@@ -1249,6 +1249,9 @@ restart_workspace() {
   # Ensure shared volume is set up (migrates existing .local if needed)
   setup_shared_volume "$dir"
 
+  # Reinstall dependencies (lockfile may have changed after reset)
+  check_and_install_deps "$dir"
+
   success "Git reset complete (on branch: $branch_name)"
 
   # If we're in tmux and the window exists, restart the panes
