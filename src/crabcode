@@ -572,6 +572,37 @@ create_workspace() {
   # Sync .env files (pass workspace number for port calculation)
   sync_env_files "$workspace_dir" "$num"
 
+  # Install dependencies (force install for new workspaces)
+  local install_cmd=$(config_get "install_command" "")
+  if [ -n "$install_cmd" ]; then
+    echo -e "${YELLOW}Installing dependencies...${NC}"
+    cd "$workspace_dir"
+    if eval "$install_cmd"; then
+      touch "$workspace_dir/node_modules/.crabcode-installed"
+      echo -e "${GREEN}Dependencies installed${NC}"
+    else
+      warn "Failed to install dependencies - run manually: $install_cmd"
+    fi
+
+    # Install submodule dependencies
+    local submodules_count=$(yq -r '.submodules | length // 0' "$CONFIG_FILE" 2>/dev/null)
+    for ((i=0; i<submodules_count; i++)); do
+      local sub_path=$(yq -r ".submodules[$i].path" "$CONFIG_FILE" 2>/dev/null)
+      local sub_install=$(yq -r ".submodules[$i].install_command // \"\"" "$CONFIG_FILE" 2>/dev/null)
+      [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
+      [ -z "$sub_install" ] || [ "$sub_install" = "null" ] && continue
+
+      if [ -d "$workspace_dir/$sub_path" ]; then
+        echo -e "${YELLOW}Installing $sub_path dependencies...${NC}"
+        cd "$workspace_dir/$sub_path"
+        if eval "$sub_install"; then
+          touch "$workspace_dir/$sub_path/node_modules/.crabcode-installed"
+        fi
+        cd "$workspace_dir"
+      fi
+    done
+  fi
+
   success "Workspace $num created at $workspace_dir"
 }
 
