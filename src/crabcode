@@ -1616,11 +1616,20 @@ wip_list() {
     if [ -f "$metadata" ]; then
       local summary=$(grep -o '"summary"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"summary"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
       local created=$(grep -o '"created_at"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"created_at"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+
+      # Handle both new format (branch) and old format (cloud_branch)
       local branch=$(grep -o '"branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      if [ -z "$branch" ]; then
+        branch=$(grep -o '"cloud_branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"cloud_branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      fi
+
+      # Format date nicely
+      local display_date=$(echo "$created" | cut -d'T' -f1)
+      local display_time=$(echo "$created" | cut -d'T' -f2 | cut -d'+' -f1 | cut -d'-' -f1 | cut -c1-5)
 
       echo -e "  ${GREEN}[$i]${NC} $name"
       echo -e "      ${BLUE}$summary${NC}"
-      echo -e "      Branch: $branch | Created: $created"
+      echo -e "      Branch: $branch | Created: $display_date $display_time"
       echo ""
     else
       echo -e "  ${GREEN}[$i]${NC} $name (no metadata)"
