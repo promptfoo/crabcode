@@ -1370,6 +1370,16 @@ open_workspace_separate() {
   fi
 }
 
+# Detect workspace number from current directory only (not tmux)
+detect_workspace_from_dir() {
+  local cwd=$(pwd)
+  if [[ "$cwd" =~ $WORKSPACE_PREFIX-([0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return
+  fi
+  echo ""
+}
+
 # Detect workspace number from current directory or tmux window
 detect_workspace() {
   # First try: current directory
@@ -1621,6 +1631,280 @@ wip_list() {
   done
 }
 
+# List all WIPs globally across all workspaces
+wip_list_global() {
+  if [ ! -d "$WIP_BASE" ]; then
+    echo -e "${YELLOW}No WIP states saved${NC}"
+    echo "  Save your work with: crab wip save"
+    return 0
+  fi
+
+  # Collect all WIPs with their metadata
+  local all_wips=()
+  local wip_data=()
+
+  # Scan all workspace WIP directories
+  for ws_dir in "$WIP_BASE"/*/; do
+    [ ! -d "$ws_dir" ] && continue
+    local ws_name=$(basename "$ws_dir")
+
+    for wip in "$ws_dir"*/; do
+      [ ! -d "$wip" ] && continue
+      local metadata="$wip/metadata.json"
+      if [ -f "$metadata" ]; then
+        # Get timestamp for sorting
+        local timestamp=$(grep -o '"timestamp"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"timestamp"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+        all_wips+=("$timestamp|$ws_name|$wip")
+      else
+        all_wips+=("00000000-000000|$ws_name|$wip")
+      fi
+    done
+  done
+
+  if [ ${#all_wips[@]} -eq 0 ]; then
+    echo -e "${YELLOW}No WIP states saved${NC}"
+    echo "  Save your work with: crab wip save"
+    return 0
+  fi
+
+  # Sort by timestamp (newest first)
+  IFS=$'\n' sorted_wips=($(printf '%s\n' "${all_wips[@]}" | sort -r))
+  unset IFS
+
+  echo -e "${CYAN}${BOLD}All WIP States${NC}"
+  echo ""
+
+  local i=1
+  for entry in "${sorted_wips[@]}"; do
+    local ws_name=$(echo "$entry" | cut -d'|' -f2)
+    local wip_path=$(echo "$entry" | cut -d'|' -f3)
+    local wip_name=$(basename "$wip_path")
+    local metadata="$wip_path/metadata.json"
+
+    # Extract workspace number from ws_name (e.g., cloud-workspace-1 -> 1)
+    local ws_num=$(echo "$ws_name" | grep -o '[0-9]*$')
+
+    # Count patch files
+    local file_count=$(ls -1 "$wip_path"/*.patch 2>/dev/null | wc -l | tr -d ' ')
+    [ -z "$file_count" ] && file_count=0
+
+    if [ -f "$metadata" ]; then
+      local summary=$(grep -o '"summary"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"summary"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      local created=$(grep -o '"created_at"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"created_at"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+
+      # Handle both new format (branch) and old format (cloud_branch)
+      local branch=$(grep -o '"branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      if [ -z "$branch" ]; then
+        branch=$(grep -o '"cloud_branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"cloud_branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      fi
+
+      # Handle both new format (commits_ahead) and old format (cloud_commits_ahead)
+      local commits_ahead=$(grep -o '"commits_ahead"[[:space:]]*:[[:space:]]*[0-9]*' "$metadata" | sed 's/"commits_ahead"[[:space:]]*:[[:space:]]*//')
+      if [ -z "$commits_ahead" ]; then
+        commits_ahead=$(grep -o '"cloud_commits_ahead"[[:space:]]*:[[:space:]]*[0-9]*' "$metadata" | sed 's/"cloud_commits_ahead"[[:space:]]*:[[:space:]]*//')
+      fi
+
+      # Format the date nicely
+      local display_date=$(echo "$created" | cut -d'T' -f1)
+      local display_time=$(echo "$created" | cut -d'T' -f2 | cut -d'+' -f1 | cut -d'-' -f1 | cut -c1-5)
+
+      echo -e "  ${GREEN}[$i]${NC} ${BOLD}$wip_name${NC}"
+      echo -e "      ${BLUE}$summary${NC}"
+      echo -e "      ${GRAY}Workspace: ${NC}$ws_num  ${GRAY}Branch: ${NC}$branch  ${GRAY}Files: ${NC}$file_count patches"
+      if [ -n "$commits_ahead" ] && [ "$commits_ahead" != "0" ]; then
+        echo -e "      ${GRAY}Commits ahead: ${NC}$commits_ahead  ${GRAY}Created: ${NC}$display_date $display_time"
+      else
+        echo -e "      ${GRAY}Created: ${NC}$display_date $display_time"
+      fi
+      echo ""
+    else
+      echo -e "  ${GREEN}[$i]${NC} ${BOLD}$wip_name${NC} ${GRAY}(no metadata)${NC}"
+      echo -e "      ${GRAY}Workspace: ${NC}$ws_num  ${GRAY}Files: ${NC}$file_count patches"
+      echo ""
+    fi
+
+    ((i++))
+  done
+
+  echo -e "${GRAY}Restore with: crab wip restore <number> [--to <workspace>]${NC}"
+}
+
+# Interactive restore from global WIP list
+wip_restore_global() {
+  local target_ws="${1:-}"
+
+  if [ ! -d "$WIP_BASE" ]; then
+    error "No WIP states found"
+    return 1
+  fi
+
+  # Collect all WIPs
+  local all_wips=()
+  for ws_dir in "$WIP_BASE"/*/; do
+    [ ! -d "$ws_dir" ] && continue
+    local ws_name=$(basename "$ws_dir")
+
+    for wip in "$ws_dir"*/; do
+      [ ! -d "$wip" ] && continue
+      local metadata="$wip/metadata.json"
+      if [ -f "$metadata" ]; then
+        local timestamp=$(grep -o '"timestamp"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"timestamp"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+        all_wips+=("$timestamp|$ws_name|$wip")
+      else
+        all_wips+=("00000000-000000|$ws_name|$wip")
+      fi
+    done
+  done
+
+  if [ ${#all_wips[@]} -eq 0 ]; then
+    error "No WIP states found"
+    return 1
+  fi
+
+  # Sort by timestamp (newest first)
+  IFS=$'\n' sorted_wips=($(printf '%s\n' "${all_wips[@]}" | sort -r))
+  unset IFS
+
+  echo -e "${CYAN}Select WIP to restore:${NC}"
+  echo ""
+
+  local i=1
+  for entry in "${sorted_wips[@]}"; do
+    local ws_name=$(echo "$entry" | cut -d'|' -f2)
+    local wip_path=$(echo "$entry" | cut -d'|' -f3)
+    local wip_name=$(basename "$wip_path")
+    local metadata="$wip_path/metadata.json"
+    local ws_num=$(echo "$ws_name" | grep -o '[0-9]*$')
+    local summary=""
+
+    if [ -f "$metadata" ]; then
+      summary=$(grep -o '"summary"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"summary"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+    fi
+
+    echo -e "  ${GREEN}[$i]${NC} $wip_name ${GRAY}(ws $ws_num)${NC}"
+    [ -n "$summary" ] && echo -e "      ${BLUE}$summary${NC}"
+    ((i++))
+  done
+
+  echo ""
+  echo -e "  ${YELLOW}[0]${NC} Cancel"
+  echo ""
+
+  read -p "Select WIP [1-${#sorted_wips[@]}]: " selection
+
+  if [ "$selection" = "0" ] || [ -z "$selection" ]; then
+    echo "Cancelled."
+    return 0
+  fi
+
+  if ! [[ "$selection" =~ ^[0-9]+$ ]] || [ "$selection" -lt 1 ] || [ "$selection" -gt ${#sorted_wips[@]} ]; then
+    error "Invalid selection"
+    return 1
+  fi
+
+  local selected_entry="${sorted_wips[$((selection-1))]}"
+  local selected_ws=$(echo "$selected_entry" | cut -d'|' -f2)
+  local selected_wip=$(echo "$selected_entry" | cut -d'|' -f3)
+  local original_ws_num=$(echo "$selected_ws" | grep -o '[0-9]*$')
+
+  # Determine target workspace
+  local restore_to_ws="$original_ws_num"
+  if [ -n "$target_ws" ]; then
+    restore_to_ws="$target_ws"
+  fi
+
+  # Check if target workspace exists
+  local target_dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$restore_to_ws"
+  if [ ! -d "$target_dir" ]; then
+    echo -e "${YELLOW}Workspace $restore_to_ws does not exist.${NC}"
+    read -p "Create it? [y/N]: " create_ws
+    if [ "$create_ws" = "y" ] || [ "$create_ws" = "Y" ]; then
+      create_workspace "$restore_to_ws"
+    else
+      echo "Cancelled."
+      return 0
+    fi
+  fi
+
+  local wip_name=$(basename "$selected_wip")
+  echo ""
+  echo -e "${CYAN}Restoring WIP: $wip_name -> workspace $restore_to_ws${NC}"
+
+  _restore_wip "$restore_to_ws" "$selected_wip"
+}
+
+# Restore by index from global list
+wip_restore_by_index() {
+  local index="$1"
+  local target_ws="$2"
+
+  if [ ! -d "$WIP_BASE" ]; then
+    error "No WIP states found"
+    return 1
+  fi
+
+  # Collect all WIPs
+  local all_wips=()
+  for ws_dir in "$WIP_BASE"/*/; do
+    [ ! -d "$ws_dir" ] && continue
+    local ws_name=$(basename "$ws_dir")
+
+    for wip in "$ws_dir"*/; do
+      [ ! -d "$wip" ] && continue
+      local metadata="$wip/metadata.json"
+      if [ -f "$metadata" ]; then
+        local timestamp=$(grep -o '"timestamp"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"timestamp"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+        all_wips+=("$timestamp|$ws_name|$wip")
+      else
+        all_wips+=("00000000-000000|$ws_name|$wip")
+      fi
+    done
+  done
+
+  if [ ${#all_wips[@]} -eq 0 ]; then
+    error "No WIP states found"
+    return 1
+  fi
+
+  # Sort by timestamp (newest first)
+  IFS=$'\n' sorted_wips=($(printf '%s\n' "${all_wips[@]}" | sort -r))
+  unset IFS
+
+  if ! [[ "$index" =~ ^[0-9]+$ ]] || [ "$index" -lt 1 ] || [ "$index" -gt ${#sorted_wips[@]} ]; then
+    error "Invalid WIP index: $index (valid range: 1-${#sorted_wips[@]})"
+    return 1
+  fi
+
+  local selected_entry="${sorted_wips[$((index-1))]}"
+  local selected_ws=$(echo "$selected_entry" | cut -d'|' -f2)
+  local selected_wip=$(echo "$selected_entry" | cut -d'|' -f3)
+  local original_ws_num=$(echo "$selected_ws" | grep -o '[0-9]*$')
+
+  # Determine target workspace
+  local restore_to_ws="$original_ws_num"
+  if [ -n "$target_ws" ]; then
+    restore_to_ws="$target_ws"
+  fi
+
+  # Check if target workspace exists
+  local target_dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$restore_to_ws"
+  if [ ! -d "$target_dir" ]; then
+    echo -e "${YELLOW}Workspace $restore_to_ws does not exist.${NC}"
+    read -p "Create it? [y/N]: " create_ws
+    if [ "$create_ws" = "y" ] || [ "$create_ws" = "Y" ]; then
+      create_workspace "$restore_to_ws"
+    else
+      echo "Cancelled."
+      return 0
+    fi
+  fi
+
+  local wip_name=$(basename "$selected_wip")
+  echo -e "${CYAN}Restoring WIP: $wip_name -> workspace $restore_to_ws${NC}"
+
+  _restore_wip "$restore_to_ws" "$selected_wip"
+}
+
 wip_continue() {
   local num=$1
   local wip_dir=$(get_wip_dir "$num")
@@ -1712,13 +1996,21 @@ _restore_wip() {
   local metadata="$wip_path/metadata.json"
   local saved_branch="$branch_name"
   if [ -f "$metadata" ]; then
+    # Handle both new format (branch) and old format (cloud_branch)
     saved_branch=$(grep -o '"branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+    if [ -z "$saved_branch" ]; then
+      saved_branch=$(grep -o '"cloud_branch"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"cloud_branch"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+    fi
+    # If still empty, use default branch name
+    if [ -z "$saved_branch" ]; then
+      saved_branch="$branch_name"
+    fi
   fi
 
   cd "$dir"
 
   local current_branch=$(git branch --show-current)
-  if [ "$current_branch" != "$saved_branch" ]; then
+  if [ "$current_branch" != "$saved_branch" ] && [ -n "$saved_branch" ]; then
     echo "  Switching to branch $saved_branch..."
     git checkout "$saved_branch" 2>/dev/null || git checkout -b "$saved_branch"
   fi
@@ -3372,9 +3664,11 @@ show_cheat() {
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab wip save              Save current changes                              ║
 ║  crab wip save --restart    Save then restart workspace                       ║
-║  crab wip ls                List saved WIP states                             ║
-║  crab wip --continue        Restore most recent WIP                           ║
-║  crab wip --resume          Interactive WIP selection                         ║
+║  crab wip ls                List all WIPs globally with metadata              ║
+║  crab wip restore           Interactive restore from all WIPs                 ║
+║  crab wip restore <N>       Restore WIP #N to original workspace              ║
+║  crab wip restore <N> --to <ws>  Restore to different workspace               ║
+║  crab wip --continue        Restore most recent WIP (current workspace)       ║
 ║  crab wip delete <name>     Delete a saved WIP state                          ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -3452,9 +3746,11 @@ show_help() {
   echo ""
   echo "WIP Commands:"
   echo "  wip save          Save current changes"
-  echo "  wip ls            List saved WIP states"
-  echo "  wip --continue    Restore most recent WIP"
-  echo "  wip --resume      Interactive WIP selection"
+  echo "  wip ls            List all WIPs globally"
+  echo "  wip restore       Interactive restore from all WIPs"
+  echo "  wip restore <N>   Restore WIP #N"
+  echo "  wip restore <N> --to <ws>  Restore to different workspace"
+  echo "  wip --continue    Restore most recent WIP (current workspace)"
   echo ""
   echo "Toolkit Commands:"
   echo "  tk share <path>   Share file/folder (temp URL)"
@@ -3651,12 +3947,14 @@ main() {
       load_config
       validate_config
       num=$(detect_workspace)
-      if [ -z "$num" ]; then
-        error "Not in a workspace directory. Use: crabcode <N> wip ..."
-        exit 1
-      fi
+
       case "${2:-}" in
         "save")
+          # Save requires being in a workspace
+          if [ -z "$num" ]; then
+            error "Not in a workspace directory. Use: crab ws <N> wip save"
+            exit 1
+          fi
           if [ "${3:-}" = "--restart" ] || [ "${3:-}" = "-r" ]; then
             wip_save "$num" "true"
           else
@@ -3664,24 +3962,76 @@ main() {
           fi
           ;;
         "ls"|"list")
-          wip_list "$num"
+          # List is global by default, unless --ws flag or physically in workspace
+          local dir_ws=$(detect_workspace_from_dir)
+          if [ "${3:-}" = "--ws" ] && [ -n "$num" ]; then
+            # Explicitly request workspace-specific list
+            wip_list "$num"
+          elif [ -n "$dir_ws" ] && [ "${3:-}" != "--all" ] && [ "${3:-}" != "-a" ]; then
+            # Physically in workspace directory, show workspace-specific
+            wip_list "$dir_ws"
+            echo -e "${GRAY}Use 'crab wip ls --all' to see all workspaces${NC}"
+          else
+            # Global view (default when not physically in workspace)
+            wip_list_global
+          fi
+          ;;
+        "restore")
+          # Restore by index with optional target workspace
+          local target_ws=""
+          local index="${3:-}"
+
+          # Parse --to flag
+          if [ "${4:-}" = "--to" ] && [ -n "${5:-}" ]; then
+            target_ws="${5}"
+          fi
+
+          if [ -z "$index" ]; then
+            # Interactive restore
+            wip_restore_global "$target_ws"
+          else
+            wip_restore_by_index "$index" "$target_ws"
+          fi
           ;;
         "--continue"|"-c")
+          if [ -z "$num" ]; then
+            error "Not in a workspace directory. Use: crab wip restore"
+            exit 1
+          fi
           wip_continue "$num"
           ;;
         "--resume"|"-r"|"resume")
-          wip_resume "$num"
+          if [ -z "$num" ]; then
+            # Global interactive restore
+            wip_restore_global
+          else
+            wip_resume "$num"
+          fi
           ;;
         "delete"|"rm")
+          if [ -z "$num" ]; then
+            error "Not in a workspace directory. Use: crab ws <N> wip delete <name>"
+            exit 1
+          fi
           wip_delete "$num" "${3:-}"
           ;;
         *)
           echo -e "${CYAN}WIP Commands:${NC}"
-          echo "  crabcode wip save [--restart]  Save current state"
-          echo "  crabcode wip ls                List saved WIP states"
-          echo "  crabcode wip --continue        Restore most recent WIP"
-          echo "  crabcode wip --resume          Interactive WIP selection"
-          echo "  crabcode wip delete <name>     Delete a WIP state"
+          echo ""
+          if [ -n "$num" ]; then
+            echo -e "  ${BOLD}In workspace $num:${NC}"
+            echo "    crab wip save [--restart]  Save current changes"
+            echo "    crab wip ls                List WIPs for this workspace"
+            echo "    crab wip --continue        Restore most recent WIP"
+            echo "    crab wip --resume          Interactive WIP selection"
+            echo "    crab wip delete <name>     Delete a WIP state"
+            echo ""
+          fi
+          echo -e "  ${BOLD}Global commands:${NC}"
+          echo "    crab wip ls                List all WIPs (global view)"
+          echo "    crab wip restore           Interactive restore from all WIPs"
+          echo "    crab wip restore <N>       Restore WIP #N to its original workspace"
+          echo "    crab wip restore <N> --to <ws>  Restore WIP #N to workspace <ws>"
           ;;
       esac
       ;;
