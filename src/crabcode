@@ -2573,6 +2573,36 @@ slack_display_messages() {
   done <<< "$messages"
 }
 
+# Get timestamp of latest message in a channel (for polling baseline)
+slack_get_latest_ts() {
+  local channel_id="$1"
+  local token=$(slack_get_token)
+
+  curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/conversations.history?channel=$channel_id&limit=1" \
+    | jq -r '.messages[0].ts // "0"'
+}
+
+# Poll for new messages since a given timestamp
+slack_poll_new_messages() {
+  local channel_id="$1"
+  local since_ts="$2"
+  local token=$(slack_get_token)
+
+  # Get messages newer than since_ts
+  local response=$(curl -s -H "Authorization: Bearer $token" \
+    "https://slack.com/api/conversations.history?channel=$channel_id&oldest=$since_ts&limit=20")
+
+  local ok=$(echo "$response" | jq -r '.ok')
+  if [ "$ok" != "true" ]; then
+    return 1
+  fi
+
+  # Return messages (excluding the one at exactly since_ts), in chronological order
+  echo "$response" | jq -c --arg ts "$since_ts" \
+    '.messages | map(select(.ts != $ts)) | reverse | .[]'
+}
+
 # Interactive chat mode
 slack_chat() {
   local target="$1"
@@ -2624,6 +2654,9 @@ slack_chat() {
   echo ""
   echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
+  # Get latest message timestamp for polling baseline
+  local last_ts=$(slack_get_latest_ts "$channel_id")
+
   # Chat loop
   local last_check=$(date +%s)
 
@@ -2635,6 +2668,8 @@ slack_chat() {
       if [ -n "$message" ]; then
         if slack_post_message "$channel_id" "$message"; then
           echo -e "${GRAY}[sent]${NC}"
+          # Update last_ts to avoid re-displaying our own message
+          last_ts=$(slack_get_latest_ts "$channel_id")
         fi
       fi
     fi
@@ -2642,7 +2677,36 @@ slack_chat() {
     # Poll for new messages every 5 seconds
     local now=$(date +%s)
     if [ $((now - last_check)) -ge 5 ]; then
-      # Check for new messages (would need to track last seen timestamp for proper implementation)
+      # Clear the prompt line before showing new messages
+      echo -ne "\r\033[K"
+
+      # Poll for new messages
+      local new_messages=$(slack_poll_new_messages "$channel_id" "$last_ts")
+
+      if [ -n "$new_messages" ]; then
+        while IFS= read -r msg; do
+          local ts=$(echo "$msg" | jq -r '.ts')
+          local time=$(echo "$msg" | jq -r '.ts | tonumber | strftime("%H:%M")')
+          local user_id=$(echo "$msg" | jq -r '.user // empty')
+          local text=$(echo "$msg" | jq -r '.text')
+          local bot_name=$(echo "$msg" | jq -r '.bot_profile.name // empty')
+
+          local sender
+          if [ -n "$bot_name" ]; then
+            sender="$bot_name"
+          elif [ -n "$user_id" ]; then
+            sender=$(slack_get_username_cached "$user_id")
+          else
+            sender="unknown"
+          fi
+
+          echo -e "${GRAY}[$time]${NC} ${CYAN}$sender${NC}: $text"
+
+          # Update last seen timestamp
+          last_ts="$ts"
+        done <<< "$new_messages"
+      fi
+
       last_check=$now
     fi
   done
