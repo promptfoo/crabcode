@@ -2028,18 +2028,15 @@ tk_transfer_ssh() {
 # Upload to Slack
 tk_upload_slack() {
   local file_path="$1"
-  local channel="${2:-}"
+  local target="${2:-}"
 
-  # Get Slack config
-  local slack_token=$(config_get "toolkit.slack.token" "")
-  local default_channel=$(config_get "toolkit.slack.default_channel" "")
-
-  [ -z "$channel" ] && channel="$default_channel"
+  # Use same token as crab slack commands
+  local slack_token=$(config_get "slack.bot_token" "")
 
   # Check for slackcat first (easier)
-  if command_exists slackcat; then
+  if command_exists slackcat && [ -n "$target" ]; then
     echo -e "${CYAN}Uploading to Slack via slackcat...${NC}"
-    slackcat --channel "$channel" "$file_path"
+    slackcat --channel "$target" "$file_path"
     return $?
   fi
 
@@ -2047,24 +2044,42 @@ tk_upload_slack() {
   if [ -z "$slack_token" ]; then
     error "Slack not configured. Add to ~/.crabcode/config.yaml:"
     echo ""
-    echo "toolkit:"
-    echo "  slack:"
-    echo "    token: xoxb-your-bot-token"
-    echo "    default_channel: \"#general\""
-    echo ""
-    echo "Or install slackcat: https://github.com/bcicen/slackcat"
+    echo "slack:"
+    echo "  bot_token: xoxb-your-bot-token"
     return 1
   fi
 
-  if [ -z "$channel" ]; then
-    error "No Slack channel specified. Use --slack=#channel or set default_channel in config"
+  if [ -z "$target" ]; then
+    error "No target specified. Use --to slack:@user or --to slack:#channel"
     return 1
   fi
 
-  # Remove # prefix if present
-  channel="${channel#\#}"
-
-  echo -e "${CYAN}Uploading to Slack #$channel...${NC}"
+  # Resolve target to channel ID (supports @user and #channel)
+  local channel_id
+  if [[ "$target" == "@"* ]]; then
+    local username="${target#@}"
+    echo -e "${CYAN}Looking up user: $username...${NC}"
+    local user_id=$(slack_get_user_id "$username")
+    if [ -z "$user_id" ]; then
+      error "User not found: $target"
+      return 1
+    fi
+    channel_id=$(slack_open_dm "$user_id")
+    if [ -z "$channel_id" ] || [ "$channel_id" = "null" ]; then
+      error "Failed to open DM with $target"
+      return 1
+    fi
+    echo -e "${CYAN}Uploading file to @$username...${NC}"
+  else
+    # Remove # prefix if present
+    local channel_name="${target#\#}"
+    channel_id=$(slack_get_channel_id "$channel_name")
+    if [ -z "$channel_id" ]; then
+      error "Channel not found: $target"
+      return 1
+    fi
+    echo -e "${CYAN}Uploading file to #$channel_name...${NC}"
+  fi
 
   # Step 1: Get upload URL (new Slack API)
   local filename=$(basename "$file_path")
@@ -2075,43 +2090,33 @@ tk_upload_slack() {
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "filename=$filename&length=$filesize")
 
-  local upload_url=$(echo "$upload_response" | grep -o '"upload_url":"[^"]*"' | cut -d'"' -f4)
-  local file_id=$(echo "$upload_response" | grep -o '"file_id":"[^"]*"' | cut -d'"' -f4)
+  local upload_url=$(echo "$upload_response" | jq -r '.upload_url // empty')
+  local file_id=$(echo "$upload_response" | jq -r '.file_id // empty')
 
   if [ -z "$upload_url" ] || [ -z "$file_id" ]; then
     error "Failed to get upload URL from Slack"
-    echo "Response: $upload_response"
+    echo "$upload_response" | jq -r '.error // .'
     return 1
   fi
 
-  # Step 2: Upload file
+  # Step 2: Upload file to the URL
   curl -s -X POST "$upload_url" \
-    -H "Authorization: Bearer $slack_token" \
-    -F "file=@$file_path"
+    -F "file=@$file_path" > /dev/null
 
-  # Step 3: Complete upload and share to channel
-  # First get channel ID
-  local channels_response=$(curl -s -X GET "https://slack.com/api/conversations.list?types=public_channel,private_channel" \
-    -H "Authorization: Bearer $slack_token")
-
-  local channel_id=$(echo "$channels_response" | grep -o "\"id\":\"[^\"]*\",\"name\":\"$channel\"" | grep -o '"id":"[^"]*"' | cut -d'"' -f4)
-
-  if [ -z "$channel_id" ]; then
-    error "Could not find channel #$channel"
-    return 1
-  fi
-
+  # Step 3: Complete upload and share to channel/DM
   local complete_response=$(curl -s -X POST "https://slack.com/api/files.completeUploadExternal" \
     -H "Authorization: Bearer $slack_token" \
     -H "Content-Type: application/json" \
-    -d "{\"files\":[{\"id\":\"$file_id\"}],\"channel_id\":\"$channel_id\"}")
+    -d "$(jq -n --arg file_id "$file_id" --arg channel_id "$channel_id" \
+      '{files: [{id: $file_id}], channel_id: $channel_id}')")
 
-  if echo "$complete_response" | grep -q '"ok":true'; then
+  local ok=$(echo "$complete_response" | jq -r '.ok')
+  if [ "$ok" = "true" ]; then
     echo ""
-    success "Uploaded to Slack #$channel!"
+    success "File uploaded to $target!"
   else
     error "Failed to complete Slack upload"
-    echo "Response: $complete_response"
+    echo "$complete_response" | jq -r '.error // .'
     return 1
   fi
 }
