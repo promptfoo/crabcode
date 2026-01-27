@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -1209,6 +1209,9 @@ cleanup_workspace() {
 
   reset_submodules "$dir"
 
+  # Record mood event
+  mood_record_event "cleanup" "workspace $num"
+
   success "Workspace $num cleaned and reset to origin/main"
 }
 
@@ -1286,6 +1289,9 @@ restart_workspace() {
     tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
     sleep 0.5
     [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "clear && $claude_cmd" C-m
+
+    # Record mood event
+    mood_record_event "restart" "workspace $num"
 
     success "Workspace $num restarted!"
   else
@@ -1586,6 +1592,9 @@ wip_save() {
   "created_at": "$(date -Iseconds)"
 }
 EOF
+
+  # Record mood event
+  mood_record_event "wip_save" "$slug"
 
   success "WIP saved: $slug"
   echo -e "   ${BLUE}$summary${NC}"
@@ -3719,6 +3728,268 @@ show_doctor() {
 }
 
 # =============================================================================
+# Crab Mood - Fun ASCII crab that reacts to your work
+# =============================================================================
+
+MOOD_FILE="$CONFIG_DIR/mood.json"
+
+# ASCII art for different moods
+crab_art_happy() {
+  cat << 'EOF'
+    \o/
+   ( ˆ ᴗ ˆ )
+  /)🦀(\
+
+EOF
+}
+
+crab_art_excited() {
+  cat << 'EOF'
+   \(★ω★)/
+  /)  🎉  (\
+     🦀
+
+EOF
+}
+
+crab_art_working() {
+  cat << 'EOF'
+      💻
+   ( •_•)
+  /)🦀(\
+
+EOF
+}
+
+crab_art_nervous() {
+  cat << 'EOF'
+      😰
+   (°△°;)
+  /)🦀(\
+
+EOF
+}
+
+crab_art_sleepy() {
+  cat << 'EOF'
+     💤
+   ( -_-)
+  /)🦀(\
+
+EOF
+}
+
+crab_art_chill() {
+  cat << 'EOF'
+     🌴
+   ( ˘ω˘)
+  /)🦀(\  🍹
+
+EOF
+}
+
+crab_art_celebrating() {
+  cat << 'EOF'
+   🎊\(^o^)/🎊
+  /)  🦀  (\
+   🎉 🎉 🎉
+
+EOF
+}
+
+# Record a mood event
+mood_record_event() {
+  local event_type="$1"
+  local details="${2:-}"
+  local timestamp=$(date +%s)
+
+  mkdir -p "$CONFIG_DIR"
+
+  # Initialize mood file if doesn't exist
+  if [ ! -f "$MOOD_FILE" ]; then
+    echo '{"events":[],"stats":{"commits":0,"cleanups":0,"restarts":0,"wip_saves":0,"prs_merged":0}}' > "$MOOD_FILE"
+  fi
+
+  # Add event (keep last 50 events)
+  if command_exists jq; then
+    local tmp_file="/tmp/mood_$$"
+    jq --arg type "$event_type" --arg details "$details" --arg ts "$timestamp" \
+      '.events = ([{type: $type, details: $details, timestamp: ($ts | tonumber)}] + .events)[:50] |
+       if $type == "commit" then .stats.commits += 1
+       elif $type == "cleanup" then .stats.cleanups += 1
+       elif $type == "restart" then .stats.restarts += 1
+       elif $type == "wip_save" then .stats.wip_saves += 1
+       elif $type == "pr_merged" then .stats.prs_merged += 1
+       else . end' "$MOOD_FILE" > "$tmp_file" && mv "$tmp_file" "$MOOD_FILE"
+  fi
+}
+
+# Calculate current mood based on events and context
+mood_calculate() {
+  local now=$(date +%s)
+  local hour=$(date +%H)
+  local day_of_week=$(date +%u)  # 1=Monday, 7=Sunday
+
+  # Default mood
+  local mood="working"
+  local message="Keep coding!"
+
+  # Check if we have jq for JSON parsing
+  if ! command_exists jq; then
+    echo "working:No jq installed - but keep up the great work!"
+    return
+  fi
+
+  # Check if mood file exists
+  if [ ! -f "$MOOD_FILE" ]; then
+    echo "working:Fresh start - let's build something awesome!"
+    return
+  fi
+
+  # Get recent events (last hour)
+  local recent_commits=$(jq "[.events[] | select(.type == \"commit\" and .timestamp > ($now - 3600))] | length" "$MOOD_FILE" 2>/dev/null || echo 0)
+  local recent_prs=$(jq "[.events[] | select(.type == \"pr_merged\" and .timestamp > ($now - 86400))] | length" "$MOOD_FILE" 2>/dev/null || echo 0)
+  local total_commits=$(jq ".stats.commits // 0" "$MOOD_FILE" 2>/dev/null || echo 0)
+  local last_event_time=$(jq ".events[0].timestamp // 0" "$MOOD_FILE" 2>/dev/null || echo 0)
+  local last_event_type=$(jq -r ".events[0].type // \"none\"" "$MOOD_FILE" 2>/dev/null || echo "none")
+
+  # Calculate time since last event
+  local time_since_last=$((now - last_event_time))
+
+  # Check workspace state
+  local has_dirty_workspace=false
+  if [ -n "${WORKSPACE_BASE:-}" ] && [ -d "$WORKSPACE_BASE" ]; then
+    for ws_dir in "$WORKSPACE_BASE"/"${WORKSPACE_PREFIX:-workspace}"-*; do
+      if [ -d "$ws_dir/.git" ]; then
+        if [ -n "$(git -C "$ws_dir" status --porcelain 2>/dev/null)" ]; then
+          has_dirty_workspace=true
+          break
+        fi
+      fi
+    done
+  fi
+
+  # Determine mood
+  if [ "$recent_prs" -ge 2 ]; then
+    mood="celebrating"
+    message="$recent_prs PRs merged today! You're on fire! 🔥"
+  elif [ "$recent_prs" -ge 1 ]; then
+    mood="excited"
+    message="PR merged! Time to celebrate! 🎉"
+  elif [ "$recent_commits" -ge 5 ]; then
+    mood="excited"
+    message="$recent_commits commits in the last hour! Crushing it!"
+  elif [ "$last_event_type" = "cleanup" ] && [ "$time_since_last" -lt 300 ]; then
+    mood="happy"
+    message="Fresh workspace, fresh start! ✨"
+  elif [ "$has_dirty_workspace" = true ]; then
+    mood="nervous"
+    message="You have uncommitted changes... don't forget to commit!"
+  elif [ "$time_since_last" -gt 7200 ]; then  # More than 2 hours since last event
+    mood="sleepy"
+    message="Been quiet... taking a break? 😴"
+  elif [ "$day_of_week" -ge 6 ] && [ "$hour" -ge 18 ]; then  # Weekend evening
+    mood="chill"
+    message="Weekend vibes... maybe time to relax? 🌴"
+  elif [ "$hour" -ge 22 ] || [ "$hour" -lt 6 ]; then  # Late night / early morning
+    mood="sleepy"
+    message="It's late... get some rest! 🌙"
+  elif [ "$recent_commits" -ge 1 ]; then
+    mood="happy"
+    message="$recent_commits commits recently - nice progress!"
+  else
+    mood="working"
+    message="In the zone... keep it up! 💪"
+  fi
+
+  echo "$mood:$message"
+}
+
+# Show current crab mood
+show_mood() {
+  load_config 2>/dev/null || true
+
+  local result=$(mood_calculate)
+  local mood=$(echo "$result" | cut -d: -f1)
+  local message=$(echo "$result" | cut -d: -f2-)
+
+  echo ""
+  echo -e "${CYAN}╭──────────────────────────────────────╮${NC}"
+
+  # Show the ASCII art
+  case "$mood" in
+    "happy")
+      echo -e "${GREEN}"
+      crab_art_happy
+      echo -e "${NC}"
+      ;;
+    "excited")
+      echo -e "${YELLOW}"
+      crab_art_excited
+      echo -e "${NC}"
+      ;;
+    "celebrating")
+      echo -e "${MAGENTA}"
+      crab_art_celebrating
+      echo -e "${NC}"
+      ;;
+    "nervous")
+      echo -e "${YELLOW}"
+      crab_art_nervous
+      echo -e "${NC}"
+      ;;
+    "sleepy")
+      echo -e "${GRAY}"
+      crab_art_sleepy
+      echo -e "${NC}"
+      ;;
+    "chill")
+      echo -e "${CYAN}"
+      crab_art_chill
+      echo -e "${NC}"
+      ;;
+    *)
+      echo -e "${BLUE}"
+      crab_art_working
+      echo -e "${NC}"
+      ;;
+  esac
+
+  echo -e "${CYAN}╰──────────────────────────────────────╯${NC}"
+  echo ""
+  echo -e "  ${BOLD}Mood:${NC} $mood"
+  echo -e "  ${message}"
+  echo ""
+
+  # Show quick stats if available
+  if command_exists jq && [ -f "$MOOD_FILE" ]; then
+    local total_commits=$(jq ".stats.commits // 0" "$MOOD_FILE" 2>/dev/null || echo 0)
+    local total_cleanups=$(jq ".stats.cleanups // 0" "$MOOD_FILE" 2>/dev/null || echo 0)
+    local total_wip=$(jq ".stats.wip_saves // 0" "$MOOD_FILE" 2>/dev/null || echo 0)
+
+    if [ "$total_commits" -gt 0 ] || [ "$total_cleanups" -gt 0 ]; then
+      echo -e "  ${GRAY}Stats: $total_commits commits, $total_cleanups cleanups, $total_wip WIPs saved${NC}"
+      echo ""
+    fi
+  fi
+}
+
+# Check for git events in a workspace and record them
+mood_check_git_activity() {
+  local workspace_dir="$1"
+
+  if [ ! -d "$workspace_dir/.git" ]; then
+    return
+  fi
+
+  # Check for new commits in last 5 minutes
+  local recent_commits=$(git -C "$workspace_dir" log --oneline --since="5 minutes ago" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$recent_commits" -gt 0 ]; then
+    mood_record_event "commit" "$recent_commits new commits"
+  fi
+}
+
+# =============================================================================
 # Help / Cheat Sheet
 # =============================================================================
 
@@ -3828,6 +4099,7 @@ show_cheat() {
 ║  crab doctor           Diagnose common issues                                 ║
 ║  crab ports            Show port usage across workspaces                      ║
 ║  crab shared           Show shared volume info                                ║
+║  crab mood             Show your crab's current mood 🦀                       ║
 ║  crab update           Update crabcode to latest version                      ║
 ║  crab cheat            Show this cheat sheet                                  ║
 ║                                                                               ║
@@ -4183,6 +4455,9 @@ main() {
           echo "  Restores: branch, commits, staged/unstaged changes, submodules"
           ;;
       esac
+      ;;
+    "mood")
+      show_mood
       ;;
     "update"|"upgrade")
       # Self-update from GitHub
