@@ -3990,6 +3990,470 @@ mood_check_git_activity() {
 }
 
 # =============================================================================
+# Mobile Companion - Check status and get notifications from your phone
+# =============================================================================
+
+MOBILE_CONFIG_FILE="$CONFIG_DIR/mobile.json"
+
+# Initialize mobile config
+mobile_init() {
+  if [ ! -f "$MOBILE_CONFIG_FILE" ]; then
+    # Generate a random topic name for ntfy.sh
+    local random_topic="crab-$(openssl rand -hex 4 2>/dev/null || echo $RANDOM$RANDOM)"
+    echo "{\"ntfy_topic\":\"$random_topic\",\"enabled\":true}" > "$MOBILE_CONFIG_FILE"
+  fi
+}
+
+# Get ntfy topic
+mobile_get_topic() {
+  mobile_init
+  if command_exists jq && [ -f "$MOBILE_CONFIG_FILE" ]; then
+    jq -r ".ntfy_topic // \"\"" "$MOBILE_CONFIG_FILE" 2>/dev/null
+  else
+    echo ""
+  fi
+}
+
+# Send push notification via ntfy.sh
+crab_notify() {
+  local title="${1:-Crab Update}"
+  local message="${2:-}"
+  local priority="${3:-default}"  # min, low, default, high, urgent
+
+  mobile_init
+  local topic=$(mobile_get_topic)
+
+  if [ -z "$topic" ]; then
+    error "Mobile notifications not configured. Run 'crab mobile setup'"
+    return 1
+  fi
+
+  # Map priority to ntfy format
+  local ntfy_priority="3"
+  case "$priority" in
+    "urgent") ntfy_priority="5" ;;
+    "high") ntfy_priority="4" ;;
+    "default") ntfy_priority="3" ;;
+    "low") ntfy_priority="2" ;;
+    "min") ntfy_priority="1" ;;
+  esac
+
+  # Send notification
+  if curl -s \
+    -H "Title: 🦀 $title" \
+    -H "Priority: $ntfy_priority" \
+    -H "Tags: crab" \
+    -d "$message" \
+    "https://ntfy.sh/$topic" > /dev/null 2>&1; then
+    success "Notification sent!"
+  else
+    error "Failed to send notification"
+    return 1
+  fi
+}
+
+# Generate status JSON for mobile API
+generate_status_json() {
+  load_config 2>/dev/null || true
+
+  local workspaces_json="[]"
+
+  if [ -n "${WORKSPACE_BASE:-}" ] && [ -d "$WORKSPACE_BASE" ]; then
+    local ws_array="["
+    local first=true
+
+    for ws_dir in "$WORKSPACE_BASE"/"${WORKSPACE_PREFIX:-workspace}"-*; do
+      [ -d "$ws_dir" ] || continue
+
+      local ws_name=$(basename "$ws_dir")
+      local num=$(echo "$ws_name" | sed 's/.*-//')
+      local branch=""
+      local status="clean"
+      local changes=0
+
+      if [ -d "$ws_dir/.git" ]; then
+        branch=$(git -C "$ws_dir" branch --show-current 2>/dev/null || echo "unknown")
+        local git_status=$(git -C "$ws_dir" status --porcelain 2>/dev/null || echo "")
+        if [ -n "$git_status" ]; then
+          status="dirty"
+          changes=$(echo "$git_status" | wc -l | tr -d ' ')
+        fi
+      fi
+
+      [ "$first" = true ] || ws_array+=","
+      first=false
+      ws_array+="{\"number\":$num,\"branch\":\"$branch\",\"status\":\"$status\",\"changes\":$changes}"
+    done
+
+    ws_array+="]"
+    workspaces_json="$ws_array"
+  fi
+
+  # Get mood
+  local mood_result=$(mood_calculate 2>/dev/null || echo "working:Keep coding!")
+  local mood=$(echo "$mood_result" | cut -d: -f1)
+  local mood_message=$(echo "$mood_result" | cut -d: -f2-)
+
+  # Get stats
+  local stats_json="{}"
+  if command_exists jq && [ -f "$MOOD_FILE" ]; then
+    stats_json=$(jq ".stats // {}" "$MOOD_FILE" 2>/dev/null || echo "{}")
+  fi
+
+  cat << EOF
+{
+  "timestamp": "$(date -Iseconds)",
+  "hostname": "$(hostname)",
+  "mood": "$mood",
+  "mood_message": "$mood_message",
+  "workspaces": $workspaces_json,
+  "stats": $stats_json
+}
+EOF
+}
+
+# Show status in terminal or JSON format
+show_status() {
+  local format="${1:-terminal}"
+
+  if [ "$format" = "json" ] || [ "$format" = "--json" ]; then
+    generate_status_json
+    return
+  fi
+
+  load_config 2>/dev/null || true
+
+  echo ""
+  echo -e "${CYAN}╭────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│${NC}              ${BOLD}🦀 CRAB STATUS${NC}                       ${CYAN}│${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
+  echo ""
+
+  # Show mood summary
+  local mood_result=$(mood_calculate 2>/dev/null || echo "working:Keep coding!")
+  local mood=$(echo "$mood_result" | cut -d: -f1)
+  echo -e "  ${BOLD}Mood:${NC} $mood"
+  echo ""
+
+  # Show workspaces
+  if [ -n "${WORKSPACE_BASE:-}" ] && [ -d "$WORKSPACE_BASE" ]; then
+    echo -e "  ${BOLD}Workspaces:${NC}"
+    for ws_dir in "$WORKSPACE_BASE"/"${WORKSPACE_PREFIX:-workspace}"-*; do
+      [ -d "$ws_dir" ] || continue
+
+      local ws_name=$(basename "$ws_dir")
+      local num=$(echo "$ws_name" | sed 's/.*-//')
+      local branch=""
+      local status_icon="✓"
+      local status_color="${GREEN}"
+
+      if [ -d "$ws_dir/.git" ]; then
+        branch=$(git -C "$ws_dir" branch --show-current 2>/dev/null || echo "unknown")
+        local git_status=$(git -C "$ws_dir" status --porcelain 2>/dev/null || echo "")
+        if [ -n "$git_status" ]; then
+          local changes=$(echo "$git_status" | wc -l | tr -d ' ')
+          status_icon="●"
+          status_color="${YELLOW}"
+          echo -e "    ${status_color}${status_icon}${NC} ws-$num: $branch (${YELLOW}$changes changes${NC})"
+        else
+          echo -e "    ${status_color}${status_icon}${NC} ws-$num: $branch"
+        fi
+      fi
+    done
+  fi
+  echo ""
+}
+
+# Start simple HTTP server for mobile dashboard
+start_mobile_server() {
+  local port="${1:-8888}"
+
+  echo -e "${CYAN}Starting mobile dashboard server...${NC}"
+  echo ""
+  echo -e "  ${BOLD}Local:${NC}   http://localhost:$port"
+  echo -e "  ${BOLD}Network:${NC} http://$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):$port"
+  echo ""
+  echo -e "${GRAY}Press Ctrl+C to stop${NC}"
+  echo ""
+
+  # Check if python is available
+  if command_exists python3; then
+    # Create a simple HTML dashboard
+    local tmp_dir="/tmp/crab-mobile-$$"
+    mkdir -p "$tmp_dir"
+
+    # Generate dashboard HTML
+    cat > "$tmp_dir/index.html" << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🦀 Crab Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #eee;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { max-width: 600px; margin: 0 auto; }
+    .header {
+      text-align: center;
+      padding: 30px 0;
+    }
+    .header h1 { font-size: 2.5em; }
+    .mood-card {
+      background: rgba(255,255,255,0.1);
+      border-radius: 20px;
+      padding: 30px;
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    .mood-emoji { font-size: 4em; }
+    .mood-text { font-size: 1.2em; color: #aaa; margin-top: 10px; }
+    .workspace-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 15px;
+      padding: 15px 20px;
+      margin-bottom: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ws-name { font-weight: bold; }
+    .ws-branch { color: #888; font-size: 0.9em; }
+    .ws-status { font-size: 1.5em; }
+    .ws-status.clean { color: #4ade80; }
+    .ws-status.dirty { color: #fbbf24; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 15px;
+      margin-top: 20px;
+    }
+    .stat-card {
+      background: rgba(255,255,255,0.05);
+      border-radius: 15px;
+      padding: 20px;
+      text-align: center;
+    }
+    .stat-number { font-size: 2em; font-weight: bold; color: #60a5fa; }
+    .stat-label { color: #888; font-size: 0.85em; margin-top: 5px; }
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .action-btn {
+      background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+      border: none;
+      border-radius: 12px;
+      padding: 15px;
+      color: white;
+      font-size: 1em;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .action-btn:active { transform: scale(0.98); }
+    .action-btn.danger { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+    .refresh-note { text-align: center; color: #666; margin-top: 20px; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🦀 Crab</h1>
+    </div>
+
+    <div class="mood-card">
+      <div class="mood-emoji" id="mood-emoji">💻</div>
+      <div class="mood-text" id="mood-text">Loading...</div>
+    </div>
+
+    <h3 style="margin-bottom: 15px;">Workspaces</h3>
+    <div id="workspaces"></div>
+
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-number" id="stat-commits">-</div>
+        <div class="stat-label">Commits</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="stat-cleanups">-</div>
+        <div class="stat-label">Cleanups</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number" id="stat-wips">-</div>
+        <div class="stat-label">WIPs</div>
+      </div>
+    </div>
+
+    <div class="refresh-note">Pull down to refresh</div>
+  </div>
+
+  <script>
+    const moodEmojis = {
+      happy: '😊', excited: '🎉', celebrating: '🎊',
+      working: '💻', nervous: '😰', sleepy: '😴', chill: '🌴'
+    };
+
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+
+        document.getElementById('mood-emoji').textContent = moodEmojis[data.mood] || '🦀';
+        document.getElementById('mood-text').textContent = data.mood_message;
+
+        const wsContainer = document.getElementById('workspaces');
+        wsContainer.innerHTML = data.workspaces.map(ws => `
+          <div class="workspace-card">
+            <div>
+              <div class="ws-name">ws-${ws.number}</div>
+              <div class="ws-branch">${ws.branch}</div>
+            </div>
+            <div class="ws-status ${ws.status}">${ws.status === 'clean' ? '✓' : '●'}</div>
+          </div>
+        `).join('');
+
+        if (data.stats) {
+          document.getElementById('stat-commits').textContent = data.stats.commits || 0;
+          document.getElementById('stat-cleanups').textContent = data.stats.cleanups || 0;
+          document.getElementById('stat-wips').textContent = data.stats.wip_saves || 0;
+        }
+      } catch (e) {
+        console.error('Failed to load status:', e);
+      }
+    }
+
+    loadStatus();
+    setInterval(loadStatus, 5000);
+  </script>
+</body>
+</html>
+HTMLEOF
+
+    # Create a simple Python server that serves both static files and API
+    cat > "$tmp_dir/server.py" << PYEOF
+import http.server
+import json
+import subprocess
+import os
+
+class CrabHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/api/status':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            try:
+                result = subprocess.run(
+                    ['$0', 'status', '--json'],
+                    capture_output=True, text=True, timeout=10
+                )
+                self.wfile.write(result.stdout.encode())
+            except Exception as e:
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+        else:
+            super().do_GET()
+
+os.chdir('$tmp_dir')
+server = http.server.HTTPServer(('0.0.0.0', $port), CrabHandler)
+server.serve_forever()
+PYEOF
+
+    # Run the server
+    python3 "$tmp_dir/server.py"
+
+    # Cleanup on exit
+    rm -rf "$tmp_dir"
+  else
+    error "Python 3 is required for the mobile dashboard"
+    echo "Install with: brew install python3"
+    exit 1
+  fi
+}
+
+# Mobile setup wizard
+mobile_setup() {
+  echo -e "${CYAN}╭────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│${NC}         ${BOLD}🦀 Mobile Companion Setup${NC}                  ${CYAN}│${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
+  echo ""
+
+  mobile_init
+  local topic=$(mobile_get_topic)
+
+  echo -e "${BOLD}Push Notifications (via ntfy.sh)${NC}"
+  echo ""
+  echo "  1. Install the ntfy app on your phone:"
+  echo "     - iOS: https://apps.apple.com/app/ntfy/id1625396347"
+  echo "     - Android: https://play.google.com/store/apps/details?id=io.heckel.ntfy"
+  echo ""
+  echo "  2. Subscribe to your personal topic:"
+  echo -e "     ${GREEN}$topic${NC}"
+  echo ""
+  echo "  3. Test it:"
+  echo -e "     ${CYAN}crab notify \"Hello\" \"Testing from crab!\"${NC}"
+  echo ""
+  echo -e "${BOLD}Mobile Dashboard${NC}"
+  echo ""
+  echo "  Start the dashboard server:"
+  echo -e "  ${CYAN}crab mobile serve${NC}"
+  echo ""
+  echo "  Then open the URL on your phone (same WiFi network)"
+  echo ""
+
+  # Show QR code for ntfy topic if qrencode is available
+  if command_exists qrencode; then
+    echo -e "${BOLD}Scan to subscribe:${NC}"
+    qrencode -t ANSI "ntfy://$topic" 2>/dev/null || true
+    echo ""
+  fi
+}
+
+# Handle mobile commands
+handle_mobile_command() {
+  case "${1:-}" in
+    "setup"|"init")
+      mobile_setup
+      ;;
+    "serve"|"server"|"dashboard")
+      start_mobile_server "${2:-8888}"
+      ;;
+    "notify"|"push")
+      shift
+      crab_notify "$@"
+      ;;
+    "topic")
+      mobile_init
+      echo "Your ntfy topic: $(mobile_get_topic)"
+      echo "Subscribe URL: https://ntfy.sh/$(mobile_get_topic)"
+      ;;
+    "status")
+      show_status "${2:-terminal}"
+      ;;
+    *)
+      echo -e "${CYAN}Mobile Companion Commands:${NC}"
+      echo ""
+      echo "  crab mobile setup       Setup push notifications"
+      echo "  crab mobile serve       Start mobile dashboard (default: port 8888)"
+      echo "  crab mobile serve 9999  Start on custom port"
+      echo "  crab mobile notify \"Title\" \"Message\""
+      echo "  crab mobile topic       Show your ntfy topic"
+      echo "  crab mobile status      Show status"
+      echo "  crab mobile status --json  JSON output for API"
+      echo ""
+      ;;
+  esac
+}
+
+# =============================================================================
 # Help / Cheat Sheet
 # =============================================================================
 
@@ -4100,8 +4564,18 @@ show_cheat() {
 ║  crab ports            Show port usage across workspaces                      ║
 ║  crab shared           Show shared volume info                                ║
 ║  crab mood             Show your crab's current mood 🦀                       ║
+║  crab status           Show workspace status overview                         ║
 ║  crab update           Update crabcode to latest version                      ║
 ║  crab cheat            Show this cheat sheet                                  ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  MOBILE COMPANION (crab mobile ...)                                           ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab mobile setup     Setup push notifications (ntfy.sh)                     ║
+║  crab mobile serve     Start mobile dashboard on port 8888                    ║
+║  crab mobile notify "Title" "Message"   Send push notification                ║
+║  crab notify "Title" "Message"          Shorthand for above                   ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
@@ -4458,6 +4932,15 @@ main() {
       ;;
     "mood")
       show_mood
+      ;;
+    "mobile")
+      handle_mobile_command "${@:2}"
+      ;;
+    "notify")
+      crab_notify "${2:-Crab Update}" "${3:-}" "${4:-default}"
+      ;;
+    "status")
+      show_status "${2:-terminal}"
       ;;
     "update"|"upgrade")
       # Self-update from GitHub
