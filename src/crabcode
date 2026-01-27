@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.3.0"
+VERSION="0.4.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -5138,6 +5138,239 @@ handle_rewind_command() {
 }
 
 # =============================================================================
+# Live Pairing - Real-time session sharing with teammates
+# =============================================================================
+
+PAIR_SOCKET_DIR="$CONFIG_DIR/pair"
+
+# Start a pairing session (host)
+start_pair_session() {
+  local num="$1"
+  local mode="${2:-pair}"  # pair or spectate
+
+  mkdir -p "$PAIR_SOCKET_DIR"
+
+  local socket_name="crab-pair-$num"
+  local socket_path="$PAIR_SOCKET_DIR/$socket_name"
+
+  # Check if session already exists
+  if [ -S "$socket_path" ]; then
+    echo -e "${YELLOW}Pairing session already active for workspace $num${NC}"
+    echo ""
+    echo "Share this command with your teammate:"
+    echo -e "  ${GREEN}crab join $num${NC}"
+    echo ""
+    echo "Or for spectate-only mode:"
+    echo -e "  ${GREEN}crab spectate $num${NC}"
+    return
+  fi
+
+  echo -e "${CYAN}╭────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│${NC}       ${BOLD}🦀 Live Pairing - Workspace $num${NC}              ${CYAN}│${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
+  echo ""
+
+  # Create shared tmux session with socket
+  local window_name="ws$num"
+
+  if ! tmux -S "$socket_path" has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "  🔌 Creating shared session..."
+    # Create a new session with the socket
+    tmux -S "$socket_path" new-session -d -s "$SESSION_NAME" -n "$window_name"
+
+    # Set permissions so others can join
+    chmod 777 "$socket_path" 2>/dev/null || true
+  fi
+
+  echo ""
+  echo -e "${GREEN}✓ Pairing session active!${NC}"
+  echo ""
+  echo -e "${BOLD}Share with teammates:${NC}"
+  echo ""
+  echo -e "  ${CYAN}Same machine:${NC}"
+  echo "    crab join $num"
+  echo "    crab spectate $num     (view only)"
+  echo ""
+  echo -e "  ${CYAN}Remote (via SSH):${NC}"
+  echo "    ssh $(whoami)@$(hostname) -t 'crab join $num'"
+  echo ""
+  echo -e "  ${CYAN}Share via tmate (public URL):${NC}"
+  if command_exists tmate; then
+    echo "    crab pair $num --tmate"
+  else
+    echo "    Install tmate: brew install tmate"
+  fi
+  echo ""
+
+  # Attach to the session
+  tmux -S "$socket_path" attach-session -t "$SESSION_NAME"
+}
+
+# Join a pairing session
+join_pair_session() {
+  local num="$1"
+  local mode="${2:-pair}"  # pair or spectate
+
+  local socket_name="crab-pair-$num"
+  local socket_path="$PAIR_SOCKET_DIR/$socket_name"
+
+  if [ ! -S "$socket_path" ]; then
+    error "No active pairing session for workspace $num"
+    echo ""
+    echo "Ask the host to start one with: crab pair $num"
+    exit 1
+  fi
+
+  echo -e "${CYAN}Joining workspace $num...${NC}"
+
+  if [ "$mode" = "spectate" ]; then
+    echo -e "${YELLOW}Spectate mode: view only, no input${NC}"
+    tmux -S "$socket_path" attach-session -t "$SESSION_NAME" -r
+  else
+    tmux -S "$socket_path" attach-session -t "$SESSION_NAME"
+  fi
+}
+
+# Start tmate session for public sharing
+start_tmate_session() {
+  local num="$1"
+
+  if ! command_exists tmate; then
+    error "tmate is not installed"
+    echo ""
+    echo "Install with: brew install tmate"
+    exit 1
+  fi
+
+  echo -e "${CYAN}╭────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│${NC}     ${BOLD}🦀 Live Pairing via tmate - Workspace $num${NC}     ${CYAN}│${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  echo "  Starting tmate session..."
+  echo ""
+
+  # Start tmate
+  tmate -F -v -S "/tmp/tmate-crab-$num.sock" new-session -d -s "crab-$num" 2>/dev/null &
+  local tmate_pid=$!
+
+  sleep 2
+
+  # Get connection info
+  local ssh_url=$(tmate -S "/tmp/tmate-crab-$num.sock" display -p '#{tmate_ssh}' 2>/dev/null)
+  local web_url=$(tmate -S "/tmp/tmate-crab-$num.sock" display -p '#{tmate_web}' 2>/dev/null)
+  local ssh_ro_url=$(tmate -S "/tmp/tmate-crab-$num.sock" display -p '#{tmate_ssh_ro}' 2>/dev/null)
+  local web_ro_url=$(tmate -S "/tmp/tmate-crab-$num.sock" display -p '#{tmate_web_ro}' 2>/dev/null)
+
+  echo -e "${GREEN}✓ tmate session ready!${NC}"
+  echo ""
+  echo -e "${BOLD}Share these links with your teammate:${NC}"
+  echo ""
+  echo -e "  ${CYAN}Full access (pair):${NC}"
+  [ -n "$ssh_url" ] && echo "    SSH: $ssh_url"
+  [ -n "$web_url" ] && echo "    Web: $web_url"
+  echo ""
+  echo -e "  ${CYAN}View only (spectate):${NC}"
+  [ -n "$ssh_ro_url" ] && echo "    SSH: $ssh_ro_url"
+  [ -n "$web_ro_url" ] && echo "    Web: $web_ro_url"
+  echo ""
+
+  # Attach
+  tmate -S "/tmp/tmate-crab-$num.sock" attach-session -t "crab-$num"
+}
+
+# List active pairing sessions
+list_pair_sessions() {
+  echo -e "${CYAN}Active Pairing Sessions:${NC}"
+  echo ""
+
+  local found=false
+  for socket in "$PAIR_SOCKET_DIR"/crab-pair-*; do
+    [ -S "$socket" ] || continue
+    found=true
+
+    local num=$(basename "$socket" | sed 's/crab-pair-//')
+    local clients=$(tmux -S "$socket" list-clients 2>/dev/null | wc -l | tr -d ' ')
+
+    echo -e "  ${BOLD}Workspace $num${NC} - $clients connected"
+    echo "    Join: crab join $num"
+    echo "    Spectate: crab spectate $num"
+    echo ""
+  done
+
+  if [ "$found" = false ]; then
+    echo "  No active sessions."
+    echo ""
+    echo "  Start one with: crab pair <workspace-number>"
+  fi
+}
+
+# End a pairing session
+end_pair_session() {
+  local num="$1"
+  local socket_path="$PAIR_SOCKET_DIR/crab-pair-$num"
+
+  if [ ! -S "$socket_path" ]; then
+    echo "No active session for workspace $num"
+    return
+  fi
+
+  echo -e "${YELLOW}Ending pairing session for workspace $num...${NC}"
+  tmux -S "$socket_path" kill-session -t "$SESSION_NAME" 2>/dev/null || true
+  rm -f "$socket_path"
+  success "Session ended"
+}
+
+# Handle pair commands
+handle_pair_command() {
+  load_config 2>/dev/null || true
+
+  case "${1:-}" in
+    "ls"|"list")
+      list_pair_sessions
+      ;;
+    "end"|"stop")
+      if [ -z "${2:-}" ]; then
+        error "Usage: crab pair end <workspace-number>"
+        exit 1
+      fi
+      end_pair_session "$2"
+      ;;
+    "")
+      # Auto-detect workspace
+      load_config
+      validate_config
+      local num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Specify workspace: crab pair <N>"
+        exit 1
+      fi
+      start_pair_session "$num"
+      ;;
+    *)
+      if [[ "$1" =~ ^[0-9]+$ ]]; then
+        local num="$1"
+        if [ "${2:-}" = "--tmate" ]; then
+          start_tmate_session "$num"
+        else
+          start_pair_session "$num"
+        fi
+      else
+        error "Unknown pair command: $1"
+        echo ""
+        echo "Usage:"
+        echo "  crab pair <N>            Start pairing session"
+        echo "  crab pair <N> --tmate    Start with public tmate URLs"
+        echo "  crab join <N>            Join a pairing session"
+        echo "  crab spectate <N>        Join as spectator (view only)"
+        echo "  crab pair ls             List active sessions"
+        echo "  crab pair end <N>        End a session"
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+# =============================================================================
 # Help / Cheat Sheet
 # =============================================================================
 
@@ -5281,6 +5514,17 @@ show_cheat() {
 ║  crab rewind <N> 2h        Restore from ~2 hours ago                          ║
 ║  crab rewind <N> save      Create manual snapshot                             ║
 ║  crab snapshot             Create snapshot of current workspace               ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  LIVE PAIRING (crab pair ...)                                                 ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab pair <N>             Start pairing session for workspace N              ║
+║  crab pair <N> --tmate     Start with public tmate URLs                       ║
+║  crab join <N>             Join a pairing session (full access)               ║
+║  crab spectate <N>         Join as spectator (view only)                      ║
+║  crab pair ls              List active pairing sessions                       ║
+║  crab pair end <N>         End a pairing session                              ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
@@ -5646,6 +5890,23 @@ main() {
       ;;
     "rewind"|"timetravel"|"tt")
       handle_rewind_command "${@:2}"
+      ;;
+    "pair")
+      handle_pair_command "${@:2}"
+      ;;
+    "join")
+      if [ -z "${2:-}" ]; then
+        error "Usage: crab join <workspace-number>"
+        exit 1
+      fi
+      join_pair_session "$2" "pair"
+      ;;
+    "spectate"|"watch")
+      if [ -z "${2:-}" ]; then
+        error "Usage: crab spectate <workspace-number>"
+        exit 1
+      fi
+      join_pair_session "$2" "spectate"
       ;;
     "snapshot")
       load_config
