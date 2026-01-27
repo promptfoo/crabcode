@@ -4454,6 +4454,386 @@ handle_mobile_command() {
 }
 
 # =============================================================================
+# Workspace Handoff - Package and transfer entire context to teammate
+# =============================================================================
+
+HANDOFF_DIR="$CONFIG_DIR/handoffs"
+
+# Create a handoff package
+create_handoff() {
+  local num="$1"
+  local recipient="${2:-}"
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+
+  if [ ! -d "$dir" ]; then
+    error "Workspace $num does not exist"
+    exit 1
+  fi
+
+  mkdir -p "$HANDOFF_DIR"
+
+  local timestamp=$(date +%Y%m%d-%H%M%S)
+  local handoff_name="handoff-ws$num-$timestamp"
+  local handoff_path="$HANDOFF_DIR/$handoff_name"
+
+  mkdir -p "$handoff_path"
+
+  echo -e "${CYAN}Creating handoff package for workspace $num...${NC}"
+  echo ""
+
+  cd "$dir"
+
+  # 1. Save git state
+  echo "  📦 Saving git state..."
+  local branch=$(git branch --show-current 2>/dev/null || echo "main")
+  local commit=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+  local diff=$(git diff HEAD 2>/dev/null || echo "")
+  local staged=$(git diff --cached HEAD 2>/dev/null || echo "")
+  local status=$(git status --porcelain 2>/dev/null || echo "")
+  local log=$(git log --oneline -20 origin/main..HEAD 2>/dev/null || echo "")
+
+  echo "$branch" > "$handoff_path/branch.txt"
+  echo "$commit" > "$handoff_path/commit.txt"
+  [ -n "$diff" ] && echo "$diff" > "$handoff_path/unstaged.patch"
+  [ -n "$staged" ] && echo "$staged" > "$handoff_path/staged.patch"
+  [ -n "$status" ] && echo "$status" > "$handoff_path/status.txt"
+  [ -n "$log" ] && echo "$log" > "$handoff_path/commits.txt"
+
+  # 2. Save terminal history (last 100 commands from this session)
+  echo "  📜 Saving terminal history..."
+  if [ -n "$TMUX" ]; then
+    local window_name="ws$num"
+    # Capture pane content
+    tmux capture-pane -t "$SESSION_NAME:$window_name.0" -p -S -100 2>/dev/null > "$handoff_path/terminal-history.txt" || true
+    tmux capture-pane -t "$SESSION_NAME:$window_name.1" -p -S -100 2>/dev/null > "$handoff_path/server-output.txt" || true
+    tmux capture-pane -t "$SESSION_NAME:$window_name.2" -p -S -100 2>/dev/null > "$handoff_path/main-output.txt" || true
+  fi
+
+  # 3. Save Claude conversation if available
+  echo "  🤖 Looking for Claude context..."
+  local claude_history="$HOME/.claude/projects"
+  if [ -d "$claude_history" ]; then
+    # Find recent conversation files
+    local project_dir=$(find "$claude_history" -type d -name "*$(basename "$dir")*" 2>/dev/null | head -1)
+    if [ -n "$project_dir" ] && [ -d "$project_dir" ]; then
+      # Copy recent conversation (last file)
+      local recent_conv=$(ls -t "$project_dir"/*.jsonl 2>/dev/null | head -1)
+      if [ -n "$recent_conv" ] && [ -f "$recent_conv" ]; then
+        cp "$recent_conv" "$handoff_path/claude-conversation.jsonl"
+        echo "    Found Claude conversation"
+      fi
+    fi
+  fi
+
+  # 4. Save environment hints
+  echo "  ⚙️  Saving environment info..."
+  cat > "$handoff_path/environment.json" << EOF
+{
+  "workspace": $num,
+  "branch": "$branch",
+  "created_at": "$(date -Iseconds)",
+  "created_by": "$(git config user.name 2>/dev/null || echo "$USER")",
+  "recipient": "$recipient",
+  "node_version": "$(node --version 2>/dev/null || echo 'unknown')",
+  "working_directory": "$dir"
+}
+EOF
+
+  # 5. Create summary
+  echo "  📝 Generating summary..."
+  local file_count=$(echo "$status" | grep -c "^" 2>/dev/null || echo "0")
+  local commit_count=$(echo "$log" | grep -c "^" 2>/dev/null || echo "0")
+
+  cat > "$handoff_path/README.md" << EOF
+# Workspace Handoff: ws-$num
+
+**Created by:** $(git config user.name 2>/dev/null || echo "$USER")
+**Date:** $(date)
+**Branch:** $branch
+
+## Summary
+- $file_count uncommitted changes
+- $commit_count commits ahead of main
+
+## To receive this handoff:
+\`\`\`bash
+crab receive $handoff_name
+# or
+crab receive $handoff_name --to <workspace-number>
+\`\`\`
+
+## Contents
+- \`branch.txt\` - Current branch name
+- \`commit.txt\` - Current commit hash
+- \`unstaged.patch\` - Uncommitted changes
+- \`staged.patch\` - Staged changes
+- \`commits.txt\` - Commit history
+- \`terminal-history.txt\` - Terminal pane history
+- \`server-output.txt\` - Server pane output
+- \`main-output.txt\` - Main pane output
+- \`claude-conversation.jsonl\` - Claude Code context (if available)
+EOF
+
+  # 6. Create archive
+  echo "  📦 Creating archive..."
+  local archive_path="$HANDOFF_DIR/$handoff_name.tar.gz"
+  tar -czf "$archive_path" -C "$HANDOFF_DIR" "$handoff_name"
+
+  # Calculate size
+  local size=$(du -h "$archive_path" | cut -f1)
+
+  echo ""
+  success "Handoff package created!"
+  echo ""
+  echo -e "  ${BOLD}Package:${NC} $handoff_name"
+  echo -e "  ${BOLD}Size:${NC} $size"
+  echo -e "  ${BOLD}Location:${NC} $archive_path"
+  echo ""
+
+  # 7. Share options
+  if [ -n "$recipient" ]; then
+    echo -e "${CYAN}Share with $recipient:${NC}"
+    echo ""
+
+    # Check if it's a Slack user
+    if [[ "$recipient" == @* ]]; then
+      echo "  Slack: crab slack $recipient \"Handoff ready: $handoff_name\""
+      echo "         crab tk share $archive_path --to slack:$recipient"
+    else
+      echo "  Upload: crab tk share $archive_path"
+      echo "  SSH:    crab tk share $archive_path --to ssh:$recipient"
+    fi
+    echo ""
+  fi
+
+  echo -e "${GRAY}Recipient runs: crab receive $handoff_name${NC}"
+
+  # Cleanup temp directory
+  rm -rf "$handoff_path"
+}
+
+# Receive and apply a handoff package
+receive_handoff() {
+  local handoff_name="$1"
+  local target_ws="${2:-}"
+
+  # Find the handoff archive
+  local archive_path=""
+  if [ -f "$handoff_name" ]; then
+    archive_path="$handoff_name"
+  elif [ -f "$HANDOFF_DIR/$handoff_name.tar.gz" ]; then
+    archive_path="$HANDOFF_DIR/$handoff_name.tar.gz"
+  elif [ -f "$HANDOFF_DIR/$handoff_name" ]; then
+    archive_path="$HANDOFF_DIR/$handoff_name"
+  else
+    error "Handoff package not found: $handoff_name"
+    echo ""
+    echo "Looking in: $HANDOFF_DIR"
+    echo ""
+    echo "Available handoffs:"
+    ls -1 "$HANDOFF_DIR"/*.tar.gz 2>/dev/null | while read f; do
+      echo "  $(basename "$f" .tar.gz)"
+    done
+    exit 1
+  fi
+
+  echo -e "${CYAN}Receiving handoff package...${NC}"
+  echo ""
+
+  # Extract to temp directory
+  local tmp_dir="/tmp/crab-handoff-$$"
+  mkdir -p "$tmp_dir"
+  tar -xzf "$archive_path" -C "$tmp_dir"
+
+  # Find the handoff directory inside
+  local handoff_dir=$(ls -d "$tmp_dir"/*/ 2>/dev/null | head -1)
+  if [ -z "$handoff_dir" ]; then
+    error "Invalid handoff package"
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+
+  # Read metadata
+  local original_ws=$(jq -r ".workspace // 1" "$handoff_dir/environment.json" 2>/dev/null || echo "1")
+  local branch=$(cat "$handoff_dir/branch.txt" 2>/dev/null || echo "main")
+  local created_by=$(jq -r ".created_by // \"unknown\"" "$handoff_dir/environment.json" 2>/dev/null || echo "unknown")
+
+  echo -e "  ${BOLD}From:${NC} $created_by"
+  echo -e "  ${BOLD}Original workspace:${NC} $original_ws"
+  echo -e "  ${BOLD}Branch:${NC} $branch"
+  echo ""
+
+  # Determine target workspace
+  if [ -z "$target_ws" ]; then
+    target_ws="$original_ws"
+  fi
+
+  local target_dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$target_ws"
+
+  # Create workspace if needed
+  if [ ! -d "$target_dir" ]; then
+    echo "  Creating workspace $target_ws..."
+    create_workspace "$target_ws"
+  fi
+
+  cd "$target_dir"
+
+  # Apply git state
+  echo "  📦 Applying git state..."
+  git fetch origin 2>/dev/null || true
+
+  # Checkout the branch
+  if [ "$branch" != "main" ]; then
+    git checkout -B "$branch" 2>/dev/null || git checkout "$branch" 2>/dev/null || true
+  fi
+
+  # Cherry-pick commits if we have them
+  if [ -f "$handoff_dir/commits.txt" ]; then
+    local commit_count=$(wc -l < "$handoff_dir/commits.txt" | tr -d ' ')
+    if [ "$commit_count" -gt 0 ]; then
+      echo "    Found $commit_count commits to apply"
+      # Read commit hashes and cherry-pick
+      local base_commit=$(cat "$handoff_dir/commit.txt" 2>/dev/null)
+      if [ -n "$base_commit" ] && git cat-file -t "$base_commit" >/dev/null 2>&1; then
+        echo "    Cherry-picking from handoff..."
+        while read -r commit_line; do
+          local commit_hash=$(echo "$commit_line" | awk '{print $1}')
+          git cherry-pick "$commit_hash" 2>/dev/null || true
+        done < <(tac "$handoff_dir/commits.txt")
+      fi
+    fi
+  fi
+
+  # Apply patches
+  if [ -f "$handoff_dir/staged.patch" ] && [ -s "$handoff_dir/staged.patch" ]; then
+    echo "    Applying staged changes..."
+    git apply --index "$handoff_dir/staged.patch" 2>/dev/null || true
+  fi
+
+  if [ -f "$handoff_dir/unstaged.patch" ] && [ -s "$handoff_dir/unstaged.patch" ]; then
+    echo "    Applying unstaged changes..."
+    git apply "$handoff_dir/unstaged.patch" 2>/dev/null || true
+  fi
+
+  # Copy Claude conversation if available
+  if [ -f "$handoff_dir/claude-conversation.jsonl" ]; then
+    echo "  🤖 Restoring Claude context..."
+    local claude_project_dir="$HOME/.claude/projects/-$(echo "$target_dir" | tr '/' '-')"
+    mkdir -p "$claude_project_dir"
+    cp "$handoff_dir/claude-conversation.jsonl" "$claude_project_dir/handoff-$(date +%s).jsonl"
+    echo "    Claude conversation saved (use --continue to resume)"
+  fi
+
+  # Show terminal history context
+  if [ -f "$handoff_dir/terminal-history.txt" ]; then
+    echo "  📜 Terminal context available"
+  fi
+
+  echo ""
+  success "Handoff received to workspace $target_ws!"
+  echo ""
+  echo "  Next steps:"
+  echo "    crab ws $target_ws              Open the workspace"
+  echo "    crab ws $target_ws continue     Open with Claude --continue"
+  echo ""
+
+  # Show README
+  if [ -f "$handoff_dir/README.md" ]; then
+    echo -e "${GRAY}--- Handoff Notes ---${NC}"
+    cat "$handoff_dir/README.md" | head -20
+    echo -e "${GRAY}---${NC}"
+  fi
+
+  # Cleanup
+  rm -rf "$tmp_dir"
+}
+
+# List available handoffs
+list_handoffs() {
+  echo -e "${CYAN}Available Handoffs:${NC}"
+  echo ""
+
+  if [ ! -d "$HANDOFF_DIR" ] || [ -z "$(ls -A "$HANDOFF_DIR" 2>/dev/null)" ]; then
+    echo "  No handoffs found."
+    echo ""
+    echo "  Create one with: crab handoff [workspace-number] [@recipient]"
+    return
+  fi
+
+  local count=0
+  for archive in "$HANDOFF_DIR"/*.tar.gz; do
+    [ -f "$archive" ] || continue
+    count=$((count + 1))
+
+    local name=$(basename "$archive" .tar.gz)
+    local size=$(du -h "$archive" | cut -f1)
+    local date=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$archive" 2>/dev/null || stat -c "%y" "$archive" 2>/dev/null | cut -d' ' -f1-2)
+
+    echo -e "  ${BOLD}$count.${NC} $name"
+    echo -e "     Size: $size | Created: $date"
+    echo ""
+  done
+}
+
+# Handle handoff commands
+handle_handoff_command() {
+  load_config
+  validate_config
+
+  case "${1:-}" in
+    "ls"|"list")
+      list_handoffs
+      ;;
+    "receive"|"apply")
+      if [ -z "${2:-}" ]; then
+        error "Usage: crab handoff receive <handoff-name> [--to <workspace>]"
+        exit 1
+      fi
+      local handoff_name="$2"
+      local target_ws=""
+      if [ "${3:-}" = "--to" ]; then
+        target_ws="${4:-}"
+      fi
+      receive_handoff "$handoff_name" "$target_ws"
+      ;;
+    "")
+      # Auto-detect workspace and create handoff
+      local num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Not in a workspace. Use: crab handoff <workspace-number>"
+        exit 1
+      fi
+      create_handoff "$num"
+      ;;
+    *)
+      # First arg might be workspace number or recipient
+      if [[ "$1" =~ ^[0-9]+$ ]]; then
+        create_handoff "$1" "${2:-}"
+      elif [[ "$1" == @* ]]; then
+        # Recipient specified, auto-detect workspace
+        local num=$(detect_workspace)
+        if [ -z "$num" ]; then
+          error "Not in a workspace. Use: crab handoff <workspace-number> $1"
+          exit 1
+        fi
+        create_handoff "$num" "$1"
+      else
+        error "Unknown handoff command: $1"
+        echo ""
+        echo "Usage:"
+        echo "  crab handoff                    Create from current workspace"
+        echo "  crab handoff <N>                Create from workspace N"
+        echo "  crab handoff <N> @recipient     Create and note recipient"
+        echo "  crab handoff ls                 List available handoffs"
+        echo "  crab handoff receive <name>     Apply a handoff"
+        echo "  crab handoff receive <name> --to <N>  Apply to specific workspace"
+        exit 1
+      fi
+      ;;
+  esac
+}
+
+# =============================================================================
 # Help / Cheat Sheet
 # =============================================================================
 
@@ -4576,6 +4956,17 @@ show_cheat() {
 ║  crab mobile serve     Start mobile dashboard on port 8888                    ║
 ║  crab mobile notify "Title" "Message"   Send push notification                ║
 ║  crab notify "Title" "Message"          Shorthand for above                   ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  WORKSPACE HANDOFF (crab handoff ...)                                         ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab handoff              Package current workspace for teammate             ║
+║  crab handoff <N>          Package workspace N                                ║
+║  crab handoff <N> @mike    Package with recipient noted                       ║
+║  crab handoff ls           List available handoff packages                    ║
+║  crab receive <name>       Apply a handoff to original workspace              ║
+║  crab receive <name> --to <N>   Apply to different workspace                  ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
@@ -4935,6 +5326,14 @@ main() {
       ;;
     "mobile")
       handle_mobile_command "${@:2}"
+      ;;
+    "handoff")
+      handle_handoff_command "${@:2}"
+      ;;
+    "receive")
+      load_config
+      validate_config
+      receive_handoff "${2:-}" "${4:-}"
       ;;
     "notify")
       crab_notify "${2:-Crab Update}" "${3:-}" "${4:-default}"
