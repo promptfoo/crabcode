@@ -981,6 +981,24 @@
       }
     }
 
+    /* Adjust walking crab for mobile - smaller and higher to avoid nav/gesture areas */
+    @media (max-width: 768px) {
+      .walking-crab {
+        bottom: 80px; /* Above mobile browser UI/gesture areas */
+        font-size: 1.5rem;
+        opacity: 0.7;
+      }
+    }
+
+    /* Safe area adjustment for notched devices */
+    @supports (padding-bottom: env(safe-area-inset-bottom)) {
+      @media (max-width: 768px) {
+        .walking-crab {
+          bottom: calc(80px + env(safe-area-inset-bottom));
+        }
+      }
+    }
+
     /* PARALLAX MINI CRABS */
     .parallax-crab {
       position: fixed;
@@ -989,6 +1007,13 @@
       pointer-events: none;
       z-index: 0;
       transition: transform 0.1s ease-out;
+    }
+
+    /* Hide parallax crabs on mobile - causes scroll jank and overlaps content */
+    @media (max-width: 768px) {
+      .parallax-crab {
+        display: none;
+      }
     }
 
     /* CURSOR BUBBLE TRAIL */
@@ -1023,6 +1048,16 @@
       }
       .walking-crab {
         display: none;
+      }
+    }
+
+    /* Reduce floating bubbles on mobile for performance */
+    @media (max-width: 768px) {
+      .bubble {
+        animation-duration: 25s !important; /* Slower = less CPU */
+      }
+      .cursor-bubble {
+        display: none; /* No cursor trail on mobile */
       }
     }
 
@@ -1495,9 +1530,9 @@
 
     typeCommand();
 
-    // FLOATING BUBBLES (with cleanup)
+    // FLOATING BUBBLES (with cleanup) - fewer on mobile for performance
     function createBubbles() {
-      const bubbleCount = 15;
+      const bubbleCount = isMobile ? 6 : 15; // Reduce bubbles on mobile
       for (let i = 0; i < bubbleCount; i++) {
         setTimeout(() => {
           const bubble = document.createElement('div');
@@ -1516,7 +1551,11 @@
     }
     createBubbles();
 
-    // WALKING CRAB
+    // Device detection for other optimizations
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    const isTouchDevice = window.matchMedia('(hover: none)').matches;
+
+    // WALKING CRAB - works on all devices
     if (!document.querySelector('.walking-crab')) {
       const walkingCrab = document.createElement('div');
       walkingCrab.className = 'walking-crab';
@@ -1528,10 +1567,12 @@
       document.body.appendChild(walkingCrab);
     }
 
-    // PARALLAX MINI CRABS
+    // PARALLAX MINI CRABS - skip on mobile for performance
     const parallaxCrabs = [];
     function createParallaxCrabs() {
       if (document.querySelector('.parallax-crab')) return; // Guard against duplicates
+      if (isMobile || isTouchDevice) return; // Skip on mobile/touch
+
       const positions = [
         { x: 10, y: 20, speed: 0.02 },
         { x: 85, y: 35, speed: 0.03 },
@@ -1572,8 +1613,8 @@
       window.addEventListener('scroll', window.__crabScrollHandler);
     }
 
-    // CURSOR BUBBLE TRAIL (throttled, with max limit)
-    if (!window.__crabMouseMoveHandler) {
+    // CURSOR BUBBLE TRAIL (throttled, with max limit) - skip on touch devices
+    if (!window.__crabMouseMoveHandler && !isTouchDevice) {
       let lastBubbleTime = 0;
       const MAX_CURSOR_BUBBLES = 10;
 
