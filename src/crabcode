@@ -4834,6 +4834,310 @@ handle_handoff_command() {
 }
 
 # =============================================================================
+# Time Travel - Automatic snapshots and workspace rewind
+# =============================================================================
+
+SNAPSHOT_DIR="$CONFIG_DIR/snapshots"
+SNAPSHOT_INTERVAL="${CRAB_SNAPSHOT_INTERVAL:-900}"  # Default: 15 minutes
+
+# Create a snapshot of workspace state
+create_snapshot() {
+  local num="$1"
+  local label="${2:-auto}"
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+
+  if [ ! -d "$dir" ]; then
+    return 1
+  fi
+
+  mkdir -p "$SNAPSHOT_DIR/ws-$num"
+
+  local timestamp=$(date +%s)
+  local snapshot_name="$timestamp-$label"
+  local snapshot_path="$SNAPSHOT_DIR/ws-$num/$snapshot_name"
+
+  mkdir -p "$snapshot_path"
+
+  cd "$dir"
+
+  # Save git state
+  local branch=$(git branch --show-current 2>/dev/null || echo "main")
+  local commit=$(git rev-parse HEAD 2>/dev/null || echo "")
+  local diff=$(git diff HEAD 2>/dev/null || echo "")
+  local staged=$(git diff --cached HEAD 2>/dev/null || echo "")
+  local stash_count=$(git stash list 2>/dev/null | wc -l | tr -d ' ')
+
+  echo "$branch" > "$snapshot_path/branch"
+  echo "$commit" > "$snapshot_path/commit"
+  [ -n "$diff" ] && echo "$diff" > "$snapshot_path/unstaged.patch"
+  [ -n "$staged" ] && echo "$staged" > "$snapshot_path/staged.patch"
+
+  # Save metadata
+  cat > "$snapshot_path/metadata.json" << EOF
+{
+  "timestamp": $timestamp,
+  "label": "$label",
+  "branch": "$branch",
+  "commit": "$commit",
+  "has_unstaged": $([ -n "$diff" ] && echo "true" || echo "false"),
+  "has_staged": $([ -n "$staged" ] && echo "true" || echo "false"),
+  "stash_count": $stash_count,
+  "created_at": "$(date -Iseconds)"
+}
+EOF
+
+  # Prune old snapshots (keep last 50)
+  local snapshot_count=$(ls -1d "$SNAPSHOT_DIR/ws-$num"/*/ 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$snapshot_count" -gt 50 ]; then
+    ls -1d "$SNAPSHOT_DIR/ws-$num"/*/ 2>/dev/null | head -n -50 | xargs rm -rf 2>/dev/null || true
+  fi
+
+  echo "$snapshot_name"
+}
+
+# Manual snapshot with label
+save_snapshot() {
+  local num="$1"
+  local label="${2:-manual}"
+
+  echo -e "${CYAN}Creating snapshot...${NC}"
+  local snapshot_name=$(create_snapshot "$num" "$label")
+
+  if [ -n "$snapshot_name" ]; then
+    success "Snapshot saved: $label"
+    echo -e "  ${GRAY}Restore with: crab rewind $num $snapshot_name${NC}"
+  else
+    error "Failed to create snapshot"
+  fi
+}
+
+# List snapshots for a workspace
+list_snapshots() {
+  local num="$1"
+  local limit="${2:-20}"
+  local snapshot_base="$SNAPSHOT_DIR/ws-$num"
+
+  if [ ! -d "$snapshot_base" ]; then
+    echo -e "${YELLOW}No snapshots for workspace $num${NC}"
+    return
+  fi
+
+  echo -e "${CYAN}╭────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│${NC}         ${BOLD}🕐 Time Travel - Workspace $num${NC}              ${CYAN}│${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
+  echo ""
+
+  local count=0
+  for snapshot_dir in $(ls -1dr "$snapshot_base"/*/ 2>/dev/null); do
+    [ -d "$snapshot_dir" ] || continue
+    count=$((count + 1))
+    [ $count -gt $limit ] && break
+
+    local snapshot_name=$(basename "$snapshot_dir")
+    local timestamp=$(echo "$snapshot_name" | cut -d'-' -f1)
+    local label=$(echo "$snapshot_name" | cut -d'-' -f2-)
+
+    # Format time relative to now
+    local now=$(date +%s)
+    local diff=$((now - timestamp))
+    local time_ago=""
+
+    if [ $diff -lt 60 ]; then
+      time_ago="${diff}s ago"
+    elif [ $diff -lt 3600 ]; then
+      time_ago="$((diff / 60))m ago"
+    elif [ $diff -lt 86400 ]; then
+      time_ago="$((diff / 3600))h ago"
+    else
+      time_ago="$((diff / 86400))d ago"
+    fi
+
+    # Read metadata
+    local branch=""
+    local has_changes="clean"
+    if [ -f "$snapshot_dir/metadata.json" ] && command_exists jq; then
+      branch=$(jq -r ".branch // \"\"" "$snapshot_dir/metadata.json" 2>/dev/null)
+      local has_unstaged=$(jq -r ".has_unstaged // false" "$snapshot_dir/metadata.json" 2>/dev/null)
+      local has_staged=$(jq -r ".has_staged // false" "$snapshot_dir/metadata.json" 2>/dev/null)
+      [ "$has_unstaged" = "true" ] || [ "$has_staged" = "true" ] && has_changes="changes"
+    else
+      [ -f "$snapshot_dir/branch" ] && branch=$(cat "$snapshot_dir/branch")
+      [ -f "$snapshot_dir/unstaged.patch" ] || [ -f "$snapshot_dir/staged.patch" ] && has_changes="changes"
+    fi
+
+    local status_icon="✓"
+    local status_color="${GREEN}"
+    if [ "$has_changes" = "changes" ]; then
+      status_icon="●"
+      status_color="${YELLOW}"
+    fi
+
+    printf "  ${BOLD}%2d.${NC} %-12s ${GRAY}%-10s${NC} ${status_color}%s${NC} %s\n" \
+      "$count" "$time_ago" "$label" "$status_icon" "$branch"
+  done
+
+  echo ""
+  echo -e "${GRAY}Usage: crab rewind $num <N>  (restore snapshot #N)${NC}"
+  echo -e "${GRAY}       crab rewind $num 1h   (restore from ~1 hour ago)${NC}"
+  echo ""
+}
+
+# Rewind to a specific snapshot
+rewind_to_snapshot() {
+  local num="$1"
+  local target="$2"
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local snapshot_base="$SNAPSHOT_DIR/ws-$num"
+
+  if [ ! -d "$dir" ]; then
+    error "Workspace $num does not exist"
+    exit 1
+  fi
+
+  if [ ! -d "$snapshot_base" ]; then
+    error "No snapshots for workspace $num"
+    exit 1
+  fi
+
+  local snapshot_dir=""
+
+  # Handle different target formats
+  if [[ "$target" =~ ^[0-9]+$ ]]; then
+    # Target is a snapshot number (1, 2, 3...)
+    snapshot_dir=$(ls -1dr "$snapshot_base"/*/ 2>/dev/null | sed -n "${target}p")
+  elif [[ "$target" =~ ^[0-9]+[mhd]$ ]]; then
+    # Target is a time offset (30m, 2h, 1d)
+    local amount=${target%?}
+    local unit=${target: -1}
+    local seconds=0
+
+    case "$unit" in
+      "m") seconds=$((amount * 60)) ;;
+      "h") seconds=$((amount * 3600)) ;;
+      "d") seconds=$((amount * 86400)) ;;
+    esac
+
+    local target_time=$(($(date +%s) - seconds))
+
+    # Find snapshot closest to target time
+    for sdir in $(ls -1dr "$snapshot_base"/*/ 2>/dev/null); do
+      local snap_time=$(basename "$sdir" | cut -d'-' -f1)
+      if [ "$snap_time" -le "$target_time" ]; then
+        snapshot_dir="$sdir"
+        break
+      fi
+    done
+  else
+    # Target is a snapshot name
+    snapshot_dir="$snapshot_base/$target"
+  fi
+
+  if [ -z "$snapshot_dir" ] || [ ! -d "$snapshot_dir" ]; then
+    error "Snapshot not found: $target"
+    echo ""
+    echo "Use 'crab rewind $num' to see available snapshots"
+    exit 1
+  fi
+
+  local snapshot_name=$(basename "$snapshot_dir")
+  local timestamp=$(echo "$snapshot_name" | cut -d'-' -f1)
+  local label=$(echo "$snapshot_name" | cut -d'-' -f2-)
+  local time_str=$(date -r "$timestamp" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || date -d "@$timestamp" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
+
+  echo -e "${CYAN}Rewinding workspace $num to: $label ($time_str)${NC}"
+  echo ""
+
+  # First, save current state as a snapshot
+  echo "  💾 Saving current state before rewind..."
+  create_snapshot "$num" "pre-rewind" >/dev/null
+
+  cd "$dir"
+
+  # Restore branch
+  if [ -f "$snapshot_dir/branch" ]; then
+    local branch=$(cat "$snapshot_dir/branch")
+    echo "  🔀 Switching to branch: $branch"
+    git checkout "$branch" 2>/dev/null || git checkout -b "$branch" 2>/dev/null || true
+  fi
+
+  # Restore commit
+  if [ -f "$snapshot_dir/commit" ]; then
+    local commit=$(cat "$snapshot_dir/commit")
+    echo "  📌 Resetting to commit: ${commit:0:8}"
+    git reset --hard "$commit" 2>/dev/null || true
+  fi
+
+  # Apply patches
+  if [ -f "$snapshot_dir/staged.patch" ] && [ -s "$snapshot_dir/staged.patch" ]; then
+    echo "  📄 Applying staged changes..."
+    git apply --index "$snapshot_dir/staged.patch" 2>/dev/null || true
+  fi
+
+  if [ -f "$snapshot_dir/unstaged.patch" ] && [ -s "$snapshot_dir/unstaged.patch" ]; then
+    echo "  📄 Applying unstaged changes..."
+    git apply "$snapshot_dir/unstaged.patch" 2>/dev/null || true
+  fi
+
+  echo ""
+  success "Rewound to: $label"
+  echo ""
+  echo -e "  ${GRAY}Pre-rewind state saved. Undo with: crab rewind $num 1${NC}"
+}
+
+# Auto-snapshot daemon (background)
+start_snapshot_daemon() {
+  local num="$1"
+  local interval="${2:-$SNAPSHOT_INTERVAL}"
+
+  echo -e "${CYAN}Starting snapshot daemon for workspace $num...${NC}"
+  echo "  Interval: ${interval}s"
+  echo ""
+
+  while true; do
+    create_snapshot "$num" "auto" >/dev/null 2>&1
+    sleep "$interval"
+  done
+}
+
+# Handle time travel commands
+handle_rewind_command() {
+  load_config
+  validate_config
+
+  local num="${1:-}"
+
+  # Auto-detect workspace if not specified
+  if [ -z "$num" ] || ! [[ "$num" =~ ^[0-9]+$ ]]; then
+    num=$(detect_workspace)
+    if [ -z "$num" ]; then
+      error "Specify workspace number: crab rewind <N>"
+      exit 1
+    fi
+    # First arg might be the target, shift it
+    if [ -n "$1" ] && ! [[ "$1" =~ ^[0-9]+$ ]]; then
+      set -- "$num" "$@"
+    fi
+  fi
+
+  local action="${2:-}"
+
+  case "$action" in
+    "")
+      list_snapshots "$num"
+      ;;
+    "save"|"snapshot")
+      save_snapshot "$num" "${3:-manual}"
+      ;;
+    "daemon"|"auto")
+      start_snapshot_daemon "$num" "${3:-$SNAPSHOT_INTERVAL}"
+      ;;
+    *)
+      rewind_to_snapshot "$num" "$action"
+      ;;
+  esac
+}
+
+# =============================================================================
 # Help / Cheat Sheet
 # =============================================================================
 
@@ -4967,6 +5271,16 @@ show_cheat() {
 ║  crab handoff ls           List available handoff packages                    ║
 ║  crab receive <name>       Apply a handoff to original workspace              ║
 ║  crab receive <name> --to <N>   Apply to different workspace                  ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  TIME TRAVEL (crab rewind ...)                                                ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab rewind <N>           List snapshots for workspace N                     ║
+║  crab rewind <N> 3         Restore 3rd most recent snapshot                   ║
+║  crab rewind <N> 2h        Restore from ~2 hours ago                          ║
+║  crab rewind <N> save      Create manual snapshot                             ║
+║  crab snapshot             Create snapshot of current workspace               ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
@@ -5329,6 +5643,19 @@ main() {
       ;;
     "handoff")
       handle_handoff_command "${@:2}"
+      ;;
+    "rewind"|"timetravel"|"tt")
+      handle_rewind_command "${@:2}"
+      ;;
+    "snapshot")
+      load_config
+      validate_config
+      local num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Not in a workspace. Use: crab snapshot from workspace directory"
+        exit 1
+      fi
+      save_snapshot "$num" "${2:-manual}"
       ;;
     "receive")
       load_config
