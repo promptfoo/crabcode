@@ -632,7 +632,8 @@ init_submodules() {
 
     # FAST PATH: Copy submodule from main repo if it exists there
     # This is MUCH faster than git submodule update which re-checksout all files
-    if [ -d "$MAIN_REPO/$sub_path" ] && [ -d "$MAIN_REPO/$sub_path/.git" -o -f "$MAIN_REPO/$sub_path/.git" ]; then
+    local main_sub="$MAIN_REPO/$sub_path"
+    if [ -d "$main_sub" ] && { [ -d "$main_sub/.git" ] || [ -f "$main_sub/.git" ]; }; then
       echo "  Copying submodule: $sub_path (fast copy from main repo)"
 
       # Remove empty directory if exists
@@ -1239,6 +1240,77 @@ cleanup_workspace() {
   mood_record_event "cleanup" "workspace $num"
 
   success "Workspace $num cleaned and reset to origin/main"
+}
+
+# Completely destroy a workspace (remove worktree and all files)
+destroy_workspace() {
+  local num=$1
+  local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
+  local window_name="ws$num"
+  local branch_name=$(get_branch_name "$num")
+
+  if [ ! -d "$dir" ]; then
+    error "Workspace $num does not exist at $dir"
+    exit 1
+  fi
+
+  echo -e "${RED}Destroying workspace $num...${NC}"
+  echo -e "${YELLOW}This will permanently delete all files in the workspace!${NC}"
+  echo ""
+
+  # Confirm unless --force is passed
+  if [ "${2:-}" != "--force" ] && [ "${2:-}" != "-f" ]; then
+    echo -n "Are you sure? (y/N) "
+    read -r confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+      echo "Aborted."
+      return 1
+    fi
+  fi
+
+  # Kill the tmux window if it exists
+  if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo "  Killing tmux window..."
+    tmux kill-window -t "$SESSION_NAME:$window_name" 2>/dev/null || true
+  fi
+
+  # Kill any running processes for this workspace
+  local kill_pattern=$(config_get "cleanup.kill_pattern" "")
+  if [ -n "$kill_pattern" ]; then
+    kill_pattern="${kill_pattern//\{N\}/$num}"
+    kill_pattern="${kill_pattern//\{PREFIX\}/$WORKSPACE_PREFIX}"
+    echo "  Killing processes..."
+    pkill -f "$kill_pattern" 2>/dev/null || true
+  fi
+
+  # Remove the git worktree properly
+  echo "  Removing git worktree..."
+  cd "$MAIN_REPO"
+  git worktree remove "$dir" --force 2>/dev/null || true
+
+  # If worktree remove failed, force delete
+  if [ -d "$dir" ]; then
+    echo "  Force removing directory..."
+    rm -rf "$dir"
+  fi
+
+  # Clean up the branch if it exists and is not checked out elsewhere
+  if git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    # Check if branch is used by another worktree
+    local branch_in_use=$(git worktree list | grep "\[$branch_name\]" | wc -l | tr -d ' ')
+    if [ "$branch_in_use" = "0" ]; then
+      echo "  Deleting branch $branch_name..."
+      git branch -D "$branch_name" 2>/dev/null || true
+    fi
+  fi
+
+  # Clean up snapshots for this workspace
+  if [ -d "$SNAPSHOT_DIR/ws-$num" ]; then
+    echo "  Removing snapshots..."
+    rm -rf "$SNAPSHOT_DIR/ws-$num"
+  fi
+
+  success "Workspace $num destroyed"
 }
 
 restart_workspace() {
@@ -5447,6 +5519,8 @@ show_cheat() {
 ║  crab ws <N> --separate   Open in new terminal window                         ║
 ║  crab ws <N> restart   Reset git + restart panes                              ║
 ║  crab ws <N> cleanup   Kill window + reset to origin/main                     ║
+║  crab ws <N> destroy   Completely remove workspace (worktree + files)         ║
+║  crab destroy <N>      Shorthand for above                                    ║
 ║  crab ws <N> continue  Resume with --continue flag                            ║
 ║                                                                               ║
 ║  SHORTCUTS (auto-detect workspace from cwd or tmux window)                    ║
@@ -5638,6 +5712,9 @@ handle_ws_command() {
           "cleanup"|"clean")
             cleanup_workspace "$num"
             ;;
+          "destroy"|"rm"|"remove")
+            destroy_workspace "$num" "${2:-}"
+            ;;
           "restart"|"reset"|"refresh")
             restart_workspace "$num"
             ;;
@@ -5785,6 +5862,20 @@ main() {
         exit 1
       fi
       cleanup_workspace "$num"
+      ;;
+    "destroy"|"rm"|"remove")
+      load_config
+      validate_config
+      if [ -n "${2:-}" ] && [[ "${2:-}" =~ ^[0-9]+$ ]]; then
+        destroy_workspace "$2" "${3:-}"
+      else
+        num=$(detect_workspace)
+        if [ -z "$num" ]; then
+          error "Specify workspace: crab destroy <N>"
+          exit 1
+        fi
+        destroy_workspace "$num" "${2:-}"
+      fi
       ;;
     "wip")
       load_config
