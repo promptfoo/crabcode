@@ -624,16 +624,42 @@ init_submodules() {
 
     [ -z "$sub_path" ] || [ "$sub_path" = "null" ] && continue
 
-    # Check if submodule data already exists in main repo
-    local modules_dir="$git_dir/modules/$sub_path"
-    if [ -d "$modules_dir" ]; then
-      # Submodule already fetched - just checkout locally (fast, no network)
-      echo "  Checking out submodule: $sub_path (using cached data)"
-      git submodule update "$sub_path" 2>/dev/null || git submodule update --init "$sub_path" 2>/dev/null || true
+    # Check if submodule already exists in this worktree
+    if [ -d "$dir/$sub_path/.git" ] || [ -f "$dir/$sub_path/.git" ]; then
+      echo "  Submodule $sub_path already initialized"
+      continue
+    fi
+
+    # FAST PATH: Copy submodule from main repo if it exists there
+    # This is MUCH faster than git submodule update which re-checksout all files
+    if [ -d "$MAIN_REPO/$sub_path" ] && [ -d "$MAIN_REPO/$sub_path/.git" -o -f "$MAIN_REPO/$sub_path/.git" ]; then
+      echo "  Copying submodule: $sub_path (fast copy from main repo)"
+
+      # Remove empty directory if exists
+      [ -d "$dir/$sub_path" ] && rm -rf "$dir/$sub_path"
+
+      # Copy the submodule directory (uses copy-on-write on APFS/modern filesystems)
+      cp -R "$MAIN_REPO/$sub_path" "$dir/$sub_path"
+
+      # Fix the .git file to point to the shared modules dir
+      # Submodules use a .git file (not directory) pointing to ../.git/modules/name
+      if [ -f "$dir/$sub_path/.git" ]; then
+        # Update gitdir path to point to shared modules
+        local modules_dir="$git_dir/modules/$sub_path"
+        if [ -d "$modules_dir" ]; then
+          echo "gitdir: $modules_dir" > "$dir/$sub_path/.git"
+        fi
+      fi
     else
-      # Need to fetch submodule (slow, first time only)
-      echo "  Fetching submodule: $sub_path (first time, may take a moment)"
-      git submodule update --init "$sub_path" 2>/dev/null || true
+      # SLOW PATH: Fall back to git submodule update
+      local modules_dir="$git_dir/modules/$sub_path"
+      if [ -d "$modules_dir" ]; then
+        echo "  Checking out submodule: $sub_path (using cached git data)"
+        git submodule update "$sub_path" 2>/dev/null || git submodule update --init "$sub_path" 2>/dev/null || true
+      else
+        echo "  Fetching submodule: $sub_path (first time, may take a moment)"
+        git submodule update --init "$sub_path" 2>/dev/null || true
+      fi
     fi
 
     # Reset to configured ref if specified
