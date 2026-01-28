@@ -577,7 +577,12 @@ create_workspace() {
   if [ -n "$install_cmd" ]; then
     echo -e "${YELLOW}Installing dependencies...${NC}"
     cd "$workspace_dir"
-    if eval "$install_cmd"; then
+    # Export any env vars from install_env config
+    local install_env=$(config_get "install_env" "")
+    if [ -n "$install_env" ] && [ "$install_env" != "null" ]; then
+      export $install_env
+    fi
+    if bash -c "$install_cmd"; then
       touch "$workspace_dir/node_modules/.crabcode-installed"
       echo -e "${GREEN}Dependencies installed${NC}"
     else
@@ -1148,7 +1153,12 @@ check_and_install_deps() {
 
   if [ "$need_install" = "true" ]; then
     echo -e "${YELLOW}Installing dependencies...${NC}"
-    if eval "$install_cmd"; then
+    # Export any env vars from install_env config
+    local install_env=$(config_get "install_env" "")
+    if [ -n "$install_env" ] && [ "$install_env" != "null" ]; then
+      export $install_env
+    fi
+    if bash -c "$install_cmd"; then
       touch "$marker"
       echo -e "${GREEN}Dependencies installed${NC}"
     else
