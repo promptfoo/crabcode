@@ -75,6 +75,11 @@
       color: var(--text-main);
       overflow-x: hidden;
       line-height: 1.7;
+      cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><text y="18" font-size="18">🦀</text></svg>') 12 12, auto;
+    }
+
+    body.clicking {
+      cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><text y="22" font-size="22">🦀</text></svg>') 14 14, auto;
     }
 
     /* CRT scanline effect - subtle */
@@ -787,6 +792,194 @@
       line-height: 1.5;
     }
 
+    /* COMMAND HOVER PREVIEW */
+    .command-item {
+      position: relative;
+    }
+
+    .command-preview {
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%) scale(0.9);
+      background: var(--bg-void);
+      border: 1px solid var(--crab-shell);
+      border-radius: 6px;
+      padding: 0.75rem;
+      min-width: 200px;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.2s ease;
+      z-index: 100;
+      margin-bottom: 10px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    .command-item:hover .command-preview {
+      opacity: 1;
+      transform: translateX(-50%) scale(1);
+    }
+
+    .command-preview-header {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+
+    .command-preview-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .command-preview-dot.red { background: #ff5f56; }
+    .command-preview-dot.yellow { background: #ffbd2e; }
+    .command-preview-dot.green { background: #27ca40; }
+
+    .command-preview-content {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      line-height: 1.4;
+    }
+
+    .command-preview-content .typed {
+      color: var(--crab-coral);
+    }
+
+    .command-preview-content .output {
+      color: var(--seafoam);
+    }
+
+    /* CRAB MOOD WIDGET */
+    .crab-mood-widget {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      z-index: 1002;
+      transition: all 0.3s ease;
+      cursor: default;
+      user-select: none;
+    }
+
+    .crab-mood-widget:hover {
+      border-color: var(--crab-shell);
+      box-shadow: var(--glow-crab);
+    }
+
+    .crab-mood-face {
+      font-size: 1.2rem;
+      display: inline-block;
+      transition: transform 0.2s;
+    }
+
+    .crab-mood-status {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      margin-top: 2px;
+      text-align: center;
+    }
+
+    @media (max-width: 768px) {
+      .crab-mood-widget {
+        top: 10px;
+        right: 10px;
+        padding: 0.4rem 0.6rem;
+        font-size: 0.7rem;
+      }
+    }
+
+    /* BUZZWORD BINGO */
+    .buzzword-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      cursor: pointer;
+      z-index: 1002;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .buzzword-btn:hover {
+      border-color: var(--crab-shell);
+      color: var(--crab-coral);
+      box-shadow: var(--glow-crab);
+    }
+
+    .buzzword-highlight {
+      background: rgba(232, 74, 35, 0.3) !important;
+      outline: 2px solid var(--crab-shell);
+      outline-offset: 2px;
+      animation: buzzword-pulse 0.5s ease;
+    }
+
+    @keyframes buzzword-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.02); }
+    }
+
+    .buzzword-counter {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--bg-panel);
+      border: 2px solid var(--crab-shell);
+      border-radius: 12px;
+      padding: 2rem 3rem;
+      text-align: center;
+      z-index: 10001;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    }
+
+    .buzzword-counter h3 {
+      font-family: 'Anybody', sans-serif;
+      font-size: 1.5rem;
+      color: var(--crab-shell);
+      margin-bottom: 0.5rem;
+    }
+
+    .buzzword-counter .count {
+      font-size: 3rem;
+      font-weight: bold;
+      color: var(--crab-coral);
+    }
+
+    .buzzword-counter .label {
+      color: var(--text-dim);
+      font-size: 0.8rem;
+      margin-top: 0.5rem;
+    }
+
+    .buzzword-counter button {
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      background: var(--crab-shell);
+      border: none;
+      border-radius: 4px;
+      color: white;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 768px) {
+      .buzzword-btn {
+        bottom: 100px;
+        right: 10px;
+      }
+    }
+
     /* FOOTER */
     footer {
       padding: 5rem 0;
@@ -1439,6 +1632,15 @@
     </div>
   </section>
 
+  <!-- CRAB MOOD WIDGET -->
+  <div class="crab-mood-widget" id="crabMood">
+    <div class="crab-mood-face">( •_•)</div>
+    <div class="crab-mood-status">watching</div>
+  </div>
+
+  <!-- BUZZWORD BINGO BUTTON -->
+  <button class="buzzword-btn" id="buzzwordBtn">🎯 Buzzword Bingo</button>
+
   <!-- FOOTER -->
   <footer>
     <div class="container">
@@ -1783,6 +1985,227 @@
     document.querySelectorAll('.bento-section, .metrics-section, .layout-section, .manifesto, .commands-section').forEach(section => {
       sectionObserver.observe(section);
     });
+
+    // CRAB CLAW CURSOR - pinch effect on click
+    document.addEventListener('mousedown', () => document.body.classList.add('clicking'));
+    document.addEventListener('mouseup', () => document.body.classList.remove('clicking'));
+
+    // CRAB MOOD WIDGET - reacts to user actions
+    const moodWidget = document.getElementById('crabMood');
+    const moodFace = moodWidget.querySelector('.crab-mood-face');
+    const moodStatus = moodWidget.querySelector('.crab-mood-status');
+
+    const moods = {
+      idle: { face: '( -_-)', status: 'watching' },
+      scrolling: { face: '( O_O)', status: 'wheee!' },
+      hovering: { face: '( ^_^)', status: 'ooh!' },
+      clicking: { face: '( >_<)', status: 'pinch!' },
+      copying: { face: '( ★_★)', status: 'copied!' },
+      bingo: { face: '( $_$)', status: 'synergy!' },
+      sleeping: { face: '( -_-) zzz', status: 'sleepy' },
+      excited: { face: '\\(^o^)/', status: 'yay!' }
+    };
+
+    let moodTimeout;
+    let idleTimeout;
+    let lastScrollTime = 0;
+
+    function setMood(mood, duration = 2000) {
+      clearTimeout(moodTimeout);
+      clearTimeout(idleTimeout);
+      moodFace.textContent = moods[mood].face;
+      moodStatus.textContent = moods[mood].status;
+      moodFace.style.transform = 'scale(1.1)';
+      setTimeout(() => moodFace.style.transform = 'scale(1)', 150);
+
+      if (duration > 0) {
+        moodTimeout = setTimeout(() => setMood('idle', 0), duration);
+      }
+
+      // Set sleeping after long idle
+      idleTimeout = setTimeout(() => setMood('sleeping', 0), 30000);
+    }
+
+    // Scroll detection
+    window.addEventListener('scroll', () => {
+      const now = Date.now();
+      if (now - lastScrollTime > 100) {
+        setMood('scrolling', 500);
+      }
+      lastScrollTime = now;
+    });
+
+    // Hover detection on interactive elements
+    document.querySelectorAll('.install-box, .btn-github, .command-item, .bento-card').forEach(el => {
+      el.addEventListener('mouseenter', () => setMood('hovering', 1000));
+    });
+
+    // Click detection
+    document.addEventListener('click', () => setMood('clicking', 500));
+
+    // Copy detection
+    document.querySelector('.install-box').addEventListener('click', () => {
+      setTimeout(() => setMood('copying', 2000), 100);
+    });
+
+    // COMMAND HOVER PREVIEWS - mini terminal animations
+    const commandPreviews = {
+      'crab ws new': {
+        lines: [
+          { type: 'typed', text: '$ crab ws new' },
+          { type: 'output', text: '✓ Created workspace 3' },
+          { type: 'output', text: '✓ Branch: workspace-3' },
+          { type: 'output', text: '🦀 Ready!' }
+        ]
+      },
+      'crab ws <N>': {
+        lines: [
+          { type: 'typed', text: '$ crab ws 1' },
+          { type: 'output', text: '→ Opening workspace 1...' },
+          { type: 'output', text: '✓ tmux attached' }
+        ]
+      },
+      'crab restart': {
+        lines: [
+          { type: 'typed', text: '$ crab restart' },
+          { type: 'output', text: '↻ Resetting git...' },
+          { type: 'output', text: '↻ Restarting panes...' },
+          { type: 'output', text: '✓ Fresh start!' }
+        ]
+      },
+      'crab cleanup': {
+        lines: [
+          { type: 'typed', text: '$ crab cleanup' },
+          { type: 'output', text: '🧹 Cleaning workspace...' },
+          { type: 'output', text: '✓ Reset to origin/main' }
+        ]
+      },
+      'crab wip save': {
+        lines: [
+          { type: 'typed', text: '$ crab wip save' },
+          { type: 'output', text: '💾 Saving state...' },
+          { type: 'output', text: '✓ WIP saved!' }
+        ]
+      },
+      'crab tk share <path>': {
+        lines: [
+          { type: 'typed', text: '$ crab tk share ./project' },
+          { type: 'output', text: '📦 Creating archive...' },
+          { type: 'output', text: '⬆️ Uploading...' },
+          { type: 'output', text: '✓ https://transfer.sh/abc123' }
+        ]
+      }
+    };
+
+    document.querySelectorAll('.command-item').forEach(item => {
+      const codeEl = item.querySelector('code');
+      if (!codeEl) return;
+      const cmdText = codeEl.textContent.trim();
+      const preview = commandPreviews[cmdText];
+      if (!preview) return;
+
+      const previewEl = document.createElement('div');
+      previewEl.className = 'command-preview';
+      previewEl.innerHTML = `
+        <div class="command-preview-header">
+          <div class="command-preview-dot red"></div>
+          <div class="command-preview-dot yellow"></div>
+          <div class="command-preview-dot green"></div>
+        </div>
+        <div class="command-preview-content">
+          ${preview.lines.map(l => `<div class="${l.type}">${l.text}</div>`).join('')}
+        </div>
+      `;
+      item.appendChild(previewEl);
+    });
+
+    // BUZZWORD BINGO - highlight enterprise buzzwords
+    const buzzwords = [
+      'operational excellence', 'velocity', 'synergies', 'enterprise-grade',
+      'stakeholder', 'alignment', 'cross-functional', 'scalable', 'leverage',
+      'actionable', 'deliverables', 'ecosystem', 'holistic', 'paradigm',
+      'streamline', 'optimize', 'bandwidth', 'deep dive', 'low-hanging fruit',
+      'move the needle', 'circle back', 'take offline', 'value-add',
+      'best practices', 'core competency', 'mission-critical', 'proactive',
+      'robust', 'seamless', 'turnkey', 'world-class', 'cutting-edge',
+      'next-generation', 'future-proof', 'agile', 'disruptive', 'innovative',
+      'transformative', 'sustainable', 'competitive advantage', 'ROI',
+      'KPI', 'quarterly', 'business outcomes', 'value delivery', 'friction',
+      'orchestration', 'provisioning', 'operationalized', 'lifecycle',
+      'governance', 'compliance', 'SOC 2', 'ISO 27001', 'production-hardened',
+      'horizontally-scalable', 'zero-latency', 'hermetic', 'ramp-up',
+      'MTTR', 'NPS', 'headcount', 'sprint velocity'
+    ];
+
+    let bingoActive = false;
+    let highlightedElements = [];
+
+    document.getElementById('buzzwordBtn').addEventListener('click', () => {
+      if (bingoActive) {
+        // Clear highlights
+        highlightedElements.forEach(el => el.classList.remove('buzzword-highlight'));
+        highlightedElements = [];
+        document.querySelectorAll('.buzzword-counter').forEach(el => el.remove());
+        bingoActive = false;
+        return;
+      }
+
+      bingoActive = true;
+      setMood('bingo', 5000);
+
+      // Find and highlight buzzwords
+      let count = 0;
+      const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_TEXT,
+        null,
+        false
+      );
+
+      const textNodes = [];
+      while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+      const regex = new RegExp(`\\b(${buzzwords.join('|')})\\b`, 'gi');
+      const matchedParents = new Set();
+
+      textNodes.forEach(node => {
+        if (node.textContent.match(regex)) {
+          const parent = node.parentElement;
+          if (parent && !parent.classList.contains('buzzword-btn') &&
+              !parent.closest('script') && !parent.closest('style') &&
+              !matchedParents.has(parent)) {
+            matchedParents.add(parent);
+          }
+        }
+      });
+
+      // Highlight with animation
+      let delay = 0;
+      matchedParents.forEach(el => {
+        setTimeout(() => {
+          el.classList.add('buzzword-highlight');
+          highlightedElements.push(el);
+          count++;
+        }, delay);
+        delay += 50;
+      });
+
+      // Show counter after highlighting
+      setTimeout(() => {
+        const counter = document.createElement('div');
+        counter.className = 'buzzword-counter';
+        counter.innerHTML = `
+          <h3>🎯 Synergy Detected!</h3>
+          <div class="count">${matchedParents.size}</div>
+          <div class="label">enterprise buzzwords found</div>
+          <button onclick="this.parentElement.remove()">Leverage This Insight</button>
+        `;
+        document.body.appendChild(counter);
+      }, delay + 500);
+    });
+
+    // Initialize mood
+    setMood('idle', 0);
   </script>
 </body>
 </html>
