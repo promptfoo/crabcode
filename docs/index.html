@@ -1247,37 +1247,37 @@
     <div class="container">
       <div class="metrics-grid">
         <div class="metric-item">
-          <div class="metric-value">94%</div>
+          <div class="metric-value" data-target="94" data-suffix="%">0%</div>
           <div class="metric-label">Reduction in Setup Overhead</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value">73%</div>
+          <div class="metric-value" data-target="73" data-suffix="%">0%</div>
           <div class="metric-label">Less Context Switching</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value">2.4x</div>
+          <div class="metric-value" data-target="2.4" data-suffix="x" data-decimals="1">0x</div>
           <div class="metric-label">Sprint Velocity Multiplier</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value">37%</div>
+          <div class="metric-value" data-target="37" data-suffix="%">0%</div>
           <div class="metric-label">Faster Headcount Scaling</div>
         </div>
       </div>
       <div class="metrics-grid" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid var(--border-subtle);">
         <div class="metric-item">
-          <div class="metric-value">147</div>
+          <div class="metric-value" data-target="147" data-suffix="">0</div>
           <div class="metric-label">Eng Hours Saved/Quarter</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value">89%</div>
+          <div class="metric-value" data-target="89" data-suffix="%">0%</div>
           <div class="metric-label">Fewer Config Incidents</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value">$2.3M</div>
+          <div class="metric-value" data-target="2.3" data-prefix="$" data-suffix="M" data-decimals="1">$0M</div>
           <div class="metric-label">Annual Productivity Gains*</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value">4.9</div>
+          <div class="metric-value" data-target="4.9" data-suffix="" data-decimals="1">0</div>
           <div class="metric-label">Engineer Satisfaction (NPS)</div>
         </div>
       </div>
@@ -1641,6 +1641,148 @@
       };
       document.addEventListener('mousemove', window.__crabMouseMoveHandler);
     }
+
+    // ANIMATED METRIC COUNTERS - count up when scrolled into view
+    const metricObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting && !entry.target.dataset.animated) {
+          entry.target.dataset.animated = 'true';
+          const target = parseFloat(entry.target.dataset.target);
+          const decimals = parseInt(entry.target.dataset.decimals) || 0;
+          const prefix = entry.target.dataset.prefix || '';
+          const suffix = entry.target.dataset.suffix || '';
+          const duration = 1500;
+          const startTime = performance.now();
+
+          const animate = (currentTime) => {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            // Ease out cubic
+            const eased = 1 - Math.pow(1 - progress, 3);
+            const current = target * eased;
+            entry.target.textContent = prefix + current.toFixed(decimals) + suffix;
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            }
+          };
+          requestAnimationFrame(animate);
+        }
+      });
+    }, { threshold: 0.5 });
+
+    document.querySelectorAll('.metric-value[data-target]').forEach(el => {
+      metricObserver.observe(el);
+    });
+
+    // BUBBLE POP - click floating bubbles to pop them
+    let bubbleScore = 0;
+    document.addEventListener('click', (e) => {
+      if (e.target.classList.contains('bubble')) {
+        e.target.style.animation = 'none';
+        e.target.style.transform = 'scale(1.5)';
+        e.target.style.opacity = '0';
+        e.target.style.transition = 'all 0.2s ease-out';
+        bubbleScore++;
+
+        // Show score popup
+        const popup = document.createElement('div');
+        popup.textContent = '+1 🦀';
+        popup.style.cssText = `
+          position: fixed;
+          left: ${e.clientX}px;
+          top: ${e.clientY}px;
+          color: var(--crab-coral);
+          font-size: 1rem;
+          font-weight: bold;
+          pointer-events: none;
+          z-index: 9999;
+          animation: pop-score 0.8s ease-out forwards;
+        `;
+        document.body.appendChild(popup);
+        setTimeout(() => popup.remove(), 800);
+
+        // Achievement at 10
+        if (bubbleScore === 10) {
+          const achievement = document.createElement('div');
+          achievement.innerHTML = '🦀 Bubble Popper Unlocked! 🦀';
+          achievement.style.cssText = `
+            position: fixed;
+            top: 20%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--crab-shell);
+            color: white;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-weight: bold;
+            z-index: 10000;
+            animation: achievement-pop 2s ease-out forwards;
+          `;
+          document.body.appendChild(achievement);
+          setTimeout(() => achievement.remove(), 2000);
+        }
+
+        setTimeout(() => e.target.remove(), 200);
+      }
+    });
+
+    // Make bubbles clickable
+    const style = document.createElement('style');
+    style.textContent = `
+      .bubble { pointer-events: auto !important; cursor: pointer; }
+      .bubble:hover { transform: scale(1.2); }
+      @keyframes pop-score {
+        0% { transform: translateY(0) scale(1); opacity: 1; }
+        100% { transform: translateY(-50px) scale(1.5); opacity: 0; }
+      }
+      @keyframes achievement-pop {
+        0% { transform: translateX(-50%) scale(0); opacity: 0; }
+        20% { transform: translateX(-50%) scale(1.1); opacity: 1; }
+        30% { transform: translateX(-50%) scale(1); }
+        80% { transform: translateX(-50%) scale(1); opacity: 1; }
+        100% { transform: translateX(-50%) scale(0.8); opacity: 0; }
+      }
+      @keyframes scurry {
+        0% { left: -30px; transform: scaleX(1); }
+        100% { left: calc(100vw + 30px); transform: scaleX(1); }
+      }
+      .scurry-crab {
+        position: fixed;
+        font-size: 1rem;
+        z-index: 999;
+        pointer-events: none;
+        animation: scurry 1.5s linear forwards;
+      }
+    `;
+    document.head.appendChild(style);
+
+    // SECTION TRANSITION CRABS - crabs scurry across when entering new sections
+    let lastSection = null;
+    const sectionObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting && entry.target !== lastSection) {
+          lastSection = entry.target;
+          // Spawn 3-5 scurrying crabs
+          const numCrabs = Math.floor(Math.random() * 3) + 3;
+          for (let i = 0; i < numCrabs; i++) {
+            setTimeout(() => {
+              const crab = document.createElement('div');
+              crab.className = 'scurry-crab';
+              crab.textContent = '🦀';
+              crab.style.top = (entry.target.offsetTop - 20 + Math.random() * 40) + 'px';
+              crab.style.animationDuration = (1 + Math.random() * 0.5) + 's';
+              document.body.appendChild(crab);
+              setTimeout(() => crab.remove(), 2000);
+            }, i * 150);
+          }
+        }
+      });
+    }, { threshold: 0.3 });
+
+    // Observe major sections
+    document.querySelectorAll('.bento-section, .metrics-section, .layout-section, .manifesto, .commands-section').forEach(section => {
+      sectionObserver.observe(section);
+    });
   </script>
 </body>
 </html>
