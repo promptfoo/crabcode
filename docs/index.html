@@ -1194,7 +1194,7 @@
           <div class="output">✓ Worktree provisioned: ~/project-workspaces/ws-1</div>
           <div class="output">✓ Branch isolation: workspace-1</div>
           <div class="output">✓ Resource allocation: API=3001, VITE=5174</div>
-          <div class="output">✓ Environment operationalized. <span class="command">Velocity unlocked.</span></div>
+          <div class="output">✓ Environment operationalized. <span class="command">You're in. 🦀</span></div>
         </div>
       </div>
 
@@ -1223,8 +1223,8 @@
         <div class="terminal-preview">
           <div><span class="prompt">$</span> <span class="command">crab slack @engineering-lead "deployment complete, SLAs nominal"</span></div>
           <div class="output">✓ Stakeholder notified (avg response time: 4.2min)</div>
-          <div><span class="prompt">$</span> <span class="command">crab slack #incidents "resolved: P1 latency regression in prod-east"</span></div>
-          <div class="output">✓ Incident communication logged (MTTR improved 23%)</div>
+          <div><span class="prompt">$</span> <span class="command">crab slack #dev "🦀 feature shipped"</span></div>
+          <div class="output">✓ Posted to #dev</div>
         </div>
       </div>
 
@@ -1363,7 +1363,7 @@
     </div>
 
     <div class="command-group">
-      <h3>Environment Lifecycle Management</h3>
+      <h3>🦀 Workspaces</h3>
       <div class="command-grid">
         <div class="command-item">
           <code>crab ws new</code>
@@ -1530,6 +1530,10 @@
 
     typeCommand();
 
+    // Device detection for optimizations
+    const isMobile = window.matchMedia('(max-width: 768px)').matches;
+    const isTouchDevice = window.matchMedia('(hover: none)').matches;
+
     // FLOATING BUBBLES (with cleanup) - fewer on mobile for performance
     function createBubbles() {
       const bubbleCount = isMobile ? 6 : 15; // Reduce bubbles on mobile
@@ -1550,10 +1554,6 @@
       }
     }
     createBubbles();
-
-    // Device detection for other optimizations
-    const isMobile = window.matchMedia('(max-width: 768px)').matches;
-    const isTouchDevice = window.matchMedia('(hover: none)').matches;
 
     // WALKING CRAB - works on all devices
     if (!document.querySelector('.walking-crab')) {
