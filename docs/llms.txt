@@ -1,10 +1,10 @@
 # Crabcode 🦀
 
 ```
-    \___/
-   ( •_•)
-  /)🦀(\
- <      >
+     \___/
+    ( •_•)
+   /)🦀(\
+  <      >
 ```
 
 > Lightning-fast tmux workspace manager for multi-repo development

@@ -3735,7 +3735,9 @@ show_config() {
 }
 
 show_doctor() {
-  echo -e "${CYAN}Crabcode Doctor${NC}"
+  echo -e "${CYAN}    \\___/${NC}"
+  echo -e "${CYAN}   ( •_•)  Crabcode Doctor${NC}"
+  echo -e "${CYAN}  /)🦀(\\${NC}"
   echo ""
 
   local issues=0
@@ -3829,9 +3831,13 @@ show_doctor() {
 
   echo ""
   if [ $issues -eq 0 ]; then
-    success "All checks passed!"
+    echo -e "${GREEN}   \\o/${NC}"
+    echo -e "${GREEN}  ( ˆᴗˆ )  All checks passed!${NC}"
+    echo -e "${GREEN}  /)🦀(\\${NC}"
   else
-    echo -e "${RED}$issues issue(s) found${NC}"
+    echo -e "${RED}   \\__/${NC}"
+    echo -e "${RED}  ( •̩̩̩-•̩̩̩ )  $issues issue(s) found${NC}"
+    echo -e "${RED}  /)🦀(\\${NC}"
   fi
 }
 
@@ -5515,9 +5521,13 @@ show_shared() {
 show_cheat() {
   cat << 'EOF'
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║                            CRABCODE CHEAT SHEET                               ║
 ║                                                                               ║
-║  Tip: Use 'crab' as shorthand for 'crabcode'                                  ║
+║      \___/                                                                    ║
+║     ( •_•)         CRABCODE CHEAT SHEET                                       ║
+║    /)🦀(\          Workspace manager for multi-repo development               ║
+║   <      >                                                                    ║
+║                    Tip: Use 'crab' as shorthand for 'crabcode'                ║
+║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
 ║  WORKSPACE COMMANDS (crab ws ...)                                             ║
@@ -5651,7 +5661,11 @@ EOF
 }
 
 show_help() {
-  echo "crabcode v$VERSION - Workspace manager for multi-repo development"
+  echo '    \___/'
+  echo '   ( •_•)  crabcode'
+  echo '  /)🦀(\   Workspace manager for multi-repo development'
+  echo ' <      >'
+  echo "         v$VERSION"
   echo ""
   echo "Usage: crab [command] [arguments]"
   echo "       (crab is an alias for crabcode)"
@@ -6081,6 +6095,7 @@ main() {
       rm -f "$tmp_file"
       ;;
     "--version"|"-v")
+      echo '  /)🦀(\'
       echo "crabcode v$VERSION"
       ;;
     *)

@@ -202,7 +202,11 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo ""
 fi
 
-echo -e "${GREEN}crabcode installed successfully!${NC}"
+echo ""
+echo '    \___/'
+echo '   ( •_•)  Installation complete!'
+echo -e "  /)${GREEN}🦀${NC}(\\"
+echo ' <      >'
 echo ""
 echo "You can use either 'crabcode' or 'crab' command."
 echo ""
