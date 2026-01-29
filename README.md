@@ -327,6 +327,33 @@ With prefix `Ctrl+a`:
    crab ws 1
    ```
 
+## FAQ
+
+### Why Git worktrees instead of branches?
+
+With branches, switching context means stashing changes, checking out, reinstalling deps, and restarting servers. With worktrees, each workspace is a separate directory - switch instantly by changing tmux windows. No stashing, no reinstalling, no waiting.
+
+### Can I use crabcode with multiple projects?
+
+Yes! Each project gets its own `~/.crabcode/config.yaml`. Run `crab init` in each project directory. Crabcode detects which project you're in based on your current directory.
+
+### How do I clean up old workspaces?
+
+```bash
+crab ws <N> cleanup    # Reset single workspace to origin/main
+crab ws <N> destroy    # Completely remove workspace and worktree
+```
+
+### How is Crabcode different from Clawdbot?
+
+Completely unrelated projects with similar names:
+
+| | Crabcode | [Clawdbot](https://github.com/clawdbot/clawdbot) |
+|---|---|---|
+| **Purpose** | Workspace manager | Personal AI assistant |
+| **Tech** | Bash, tmux, Git worktrees | Node.js, WebSockets |
+| **Use case** | Parallel development environments | Messaging integrations |
+
 ## License
 
 MIT
