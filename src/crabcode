@@ -1509,6 +1509,9 @@ restart_workspace() {
     mood_record_event "restart" "workspace $num"
 
     success "Workspace $num restarted!"
+    else
+      echo -e "${YELLOW}  Window 'ws$num' not found and not in workspace dir${NC}"
+    fi
   else
     echo -e "${YELLOW}  Not in tmux session - run 'crabcode $num' to start${NC}"
   fi
