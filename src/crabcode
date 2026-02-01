@@ -145,35 +145,18 @@ validate_config() {
   fi
 }
 
-# Sync MCP servers from main repo to workspace in Claude Code settings
+# Sync MCP config from main repo to workspace
+# Claude Code reads MCP servers from .mcp.json in the project directory
 sync_mcp_servers() {
   local workspace_dir=$1
   local main_repo=$(config_get "main_repo" "")
 
   [ -z "$main_repo" ] && return
 
-  local claude_settings="$HOME/.claude/settings.json"
-  [ ! -f "$claude_settings" ] && return
-
-  # Check if jq is available
-  if ! command -v jq &>/dev/null; then
-    return
-  fi
-
-  # Get MCP servers from main repo
-  local mcp_servers=$(jq -r --arg repo "$main_repo" '.projects[$repo].mcpServers // empty' "$claude_settings" 2>/dev/null)
-
-  # If main repo has no MCP servers, nothing to sync
-  [ -z "$mcp_servers" ] || [ "$mcp_servers" = "null" ] || [ "$mcp_servers" = "{}" ] && return
-
-  # Update workspace's MCP servers
-  local tmp_file=$(mktemp)
-  if jq --arg ws "$workspace_dir" --argjson mcp "$mcp_servers" \
-    '.projects[$ws].mcpServers = $mcp' "$claude_settings" > "$tmp_file" 2>/dev/null; then
-    mv "$tmp_file" "$claude_settings"
-    echo -e "${GREEN}Synced MCP servers from main repo${NC}"
-  else
-    rm -f "$tmp_file"
+  # Copy .mcp.json if it exists in main repo (this is where Claude Code reads MCP config)
+  if [ -f "$main_repo/.mcp.json" ]; then
+    cp "$main_repo/.mcp.json" "$workspace_dir/.mcp.json"
+    echo -e "${GREEN}Copied .mcp.json from main repo${NC}"
   fi
 }
 
