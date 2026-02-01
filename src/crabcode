@@ -145,6 +145,38 @@ validate_config() {
   fi
 }
 
+# Sync MCP servers from main repo to workspace in Claude Code settings
+sync_mcp_servers() {
+  local workspace_dir=$1
+  local main_repo=$(config_get "main_repo" "")
+
+  [ -z "$main_repo" ] && return
+
+  local claude_settings="$HOME/.claude/settings.json"
+  [ ! -f "$claude_settings" ] && return
+
+  # Check if jq is available
+  if ! command -v jq &>/dev/null; then
+    return
+  fi
+
+  # Get MCP servers from main repo
+  local mcp_servers=$(jq -r --arg repo "$main_repo" '.projects[$repo].mcpServers // empty' "$claude_settings" 2>/dev/null)
+
+  # If main repo has no MCP servers, nothing to sync
+  [ -z "$mcp_servers" ] || [ "$mcp_servers" = "null" ] || [ "$mcp_servers" = "{}" ] && return
+
+  # Update workspace's MCP servers
+  local tmp_file=$(mktemp)
+  if jq --arg ws "$workspace_dir" --argjson mcp "$mcp_servers" \
+    '.projects[$ws].mcpServers = $mcp' "$claude_settings" > "$tmp_file" 2>/dev/null; then
+    mv "$tmp_file" "$claude_settings"
+    echo -e "${GREEN}Synced MCP servers from main repo${NC}"
+  else
+    rm -f "$tmp_file"
+  fi
+}
+
 # Expand ~ and environment variables in paths
 expand_path() {
   local path="$1"
@@ -230,8 +262,12 @@ get_workspace_ports() {
   local num=$1
   local dir=$2
 
-  local default_api=$((API_PORT_BASE + num))
-  local default_app=$((APP_PORT_BASE + num))
+  # Use port_spacing from config (default 10) for proper spacing between workspaces
+  local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
+  [ "$port_spacing" = "null" ] && port_spacing=10
+
+  local default_api=$((API_PORT_BASE + (num * port_spacing)))
+  local default_app=$((APP_PORT_BASE + (num * port_spacing)))
 
   # Read from .env if env_sync is configured
   local env_api=$(read_env_port "$dir" "api")
@@ -342,34 +378,45 @@ sync_env_files() {
       local port_var=$(echo "$ports_json" | yq -r ".[$p]" 2>/dev/null)
       [ -z "$port_var" ] || [ "$port_var" = "null" ] && continue
 
-      # Read current value from workspace .env
-      local current_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
+      # ALWAYS read base value from main repo to get consistent base port
+      # This prevents compounding port increments on repeated syncs
+      local base_value=""
+      local main_env="$MAIN_REPO/$env_path"
+      [ -f "$main_env" ] && base_value=$(grep "^${port_var}=" "$main_env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
 
-      # If no current value, try to read base from main repo
-      if [ -z "$current_value" ]; then
-        local main_env="$MAIN_REPO/$env_path"
-        [ -f "$main_env" ] && current_value=$(grep "^${port_var}=" "$main_env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
+      # Fallback to workspace .env only if main repo doesn't have it
+      if [ -z "$base_value" ]; then
+        base_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
       fi
 
-      # Extract base port number
+      # Also read current workspace value for updating
+      local current_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
+      [ -z "$current_value" ] && current_value="$base_value"
+
+      # Extract base port number from main repo value
       local base_port=""
-      if echo "$current_value" | grep -qE '^[0-9]+$'; then
-        base_port="$current_value"
-      elif echo "$current_value" | grep -qE ':[0-9]+'; then
-        base_port=$(echo "$current_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
+      if echo "$base_value" | grep -qE '^[0-9]+$'; then
+        base_port="$base_value"
+      elif echo "$base_value" | grep -qE ':[0-9]+'; then
+        base_port=$(echo "$base_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
       fi
 
       [ -z "$base_port" ] && continue
 
-      # Calculate workspace port
-      local new_port=$((base_port + workspace_num))
+      # Get port spacing (default 10 to allow multiple services per workspace)
+      local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
+      [ "$port_spacing" = "null" ] && port_spacing=10
+
+      # Calculate workspace port: base + (workspace_num * spacing)
+      # This ensures each workspace has a range of ports to avoid collisions
+      local new_port=$((base_port + (workspace_num * port_spacing)))
 
       # Check if port is available, find next free if not
       while lsof -i ":$new_port" &>/dev/null; do
         new_port=$((new_port + 1))
-        # Safety limit
-        if [ $new_port -gt $((base_port + 100)) ]; then
-          new_port=$((base_port + workspace_num))
+        # Safety limit - stay within this workspace's range
+        if [ $new_port -gt $((base_port + (workspace_num * port_spacing) + port_spacing - 1)) ]; then
+          new_port=$((base_port + (workspace_num * port_spacing)))
           break
         fi
       done
@@ -412,8 +459,16 @@ sync_env_files() {
     echo "$refs_keys" | while read -r ref_var; do
       [ -z "$ref_var" ] && continue
 
-      local ref_port_var=$(yq -r ".env_sync.files[$i].refs[\"$ref_var\"]" "$CONFIG_FILE" 2>/dev/null)
-      [ -z "$ref_port_var" ] || [ "$ref_port_var" = "null" ] && continue
+      local ref_source=$(yq -r ".env_sync.files[$i].refs[\"$ref_var\"]" "$CONFIG_FILE" 2>/dev/null)
+      [ -z "$ref_source" ] || [ "$ref_source" = "null" ] && continue
+
+      # Check for :port suffix (e.g., API_URL:port extracts just the port number)
+      local extract_port_only=false
+      local ref_port_var="$ref_source"
+      if [[ "$ref_source" == *":port" ]]; then
+        extract_port_only=true
+        ref_port_var="${ref_source%:port}"
+      fi
 
       # Look up the resolved port
       local resolved_port=$(grep "^${ref_port_var}=" "$ports_file" 2>/dev/null | cut -d= -f2)
@@ -421,21 +476,35 @@ sync_env_files() {
 
       # Read current value
       local current_value=$(grep "^${ref_var}=" "$full_path" 2>/dev/null | cut -d= -f2-)
-      [ -z "$current_value" ] && continue
 
-      # Extract current port from URL
-      local current_port=$(echo "$current_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
-      [ -z "$current_port" ] && continue
-
-      if [ "$current_port" != "$resolved_port" ]; then
-        local new_value=$(echo "$current_value" | sed "s/:${current_port}/:${resolved_port}/g")
-
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-          sed -i '' "s|^${ref_var}=.*|${ref_var}=$new_value|" "$full_path"
-        else
-          sed -i "s|^${ref_var}=.*|${ref_var}=$new_value|" "$full_path"
+      if [ "$extract_port_only" = true ]; then
+        # Set target to plain port number
+        if [ "$current_value" != "$resolved_port" ]; then
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s|^${ref_var}=.*|${ref_var}=$resolved_port|" "$full_path"
+          else
+            sed -i "s|^${ref_var}=.*|${ref_var}=$resolved_port|" "$full_path"
+          fi
+          [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $ref_var → $resolved_port${NC}"
         fi
-        [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $ref_var → :$resolved_port${NC}"
+      else
+        # Replace port in URL (existing behavior)
+        [ -z "$current_value" ] && continue
+
+        # Extract current port from URL
+        local current_port=$(echo "$current_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
+        [ -z "$current_port" ] && continue
+
+        if [ "$current_port" != "$resolved_port" ]; then
+          local new_value=$(echo "$current_value" | sed "s/:${current_port}/:${resolved_port}/g")
+
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s|^${ref_var}=.*|${ref_var}=$new_value|" "$full_path"
+          else
+            sed -i "s|^${ref_var}=.*|${ref_var}=$new_value|" "$full_path"
+          fi
+          [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $ref_var → :$resolved_port${NC}"
+        fi
       fi
     done
   done
@@ -457,8 +526,10 @@ show_ports() {
       continue
     fi
 
-    local default_api=$((API_PORT_BASE + i))
-    local default_app=$((APP_PORT_BASE + i))
+    local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
+    [ "$port_spacing" = "null" ] && port_spacing=10
+    local default_api=$((API_PORT_BASE + (i * port_spacing)))
+    local default_app=$((APP_PORT_BASE + (i * port_spacing)))
     local api_port=$(read_env_port "$dir" "api")
     local app_port=$(read_env_port "$dir" "app")
     [ -z "$api_port" ] && api_port="$default_api"
@@ -577,12 +648,14 @@ create_workspace() {
   if [ -n "$install_cmd" ]; then
     echo -e "${YELLOW}Installing dependencies...${NC}"
     cd "$workspace_dir"
-    # Export any env vars from install_env config
+    # Get env vars from install_env config
     local install_env=$(config_get "install_env" "")
+    local run_cmd="$install_cmd"
     if [ -n "$install_env" ] && [ "$install_env" != "null" ]; then
-      export $install_env
+      # Prepend env var to command so it's passed to subprocesses
+      run_cmd="$install_env $install_cmd"
     fi
-    if bash -c "$install_cmd"; then
+    if bash -c "$run_cmd"; then
       touch "$workspace_dir/node_modules/.crabcode-installed"
       echo -e "${GREEN}Dependencies installed${NC}"
     else
@@ -600,13 +673,22 @@ create_workspace() {
       if [ -d "$workspace_dir/$sub_path" ]; then
         echo -e "${YELLOW}Installing $sub_path dependencies...${NC}"
         cd "$workspace_dir/$sub_path"
-        if eval "$sub_install"; then
-          touch "$workspace_dir/$sub_path/node_modules/.crabcode-installed"
+        # Prepend env var to submodule install command too
+        local sub_run_cmd="$sub_install"
+        if [ -n "$install_env" ] && [ "$install_env" != "null" ]; then
+          sub_run_cmd="$install_env $sub_install"
+        fi
+        if bash -c "$sub_run_cmd"; then
+          # Only touch marker if node_modules exists
+          [ -d "node_modules" ] && touch "node_modules/.crabcode-installed"
         fi
         cd "$workspace_dir"
       fi
     done
   fi
+
+  # Sync MCP servers from main repo to new workspace
+  sync_mcp_servers "$workspace_dir"
 
   success "Workspace $num created at $workspace_dir"
 }
@@ -859,7 +941,9 @@ list_workspaces() {
     if [ -d "$dir" ]; then
       found=true
       local branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "unknown")
-      local api_port=$((API_PORT_BASE + i))
+      local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
+      [ "$port_spacing" = "null" ] && port_spacing=10
+      local api_port=$((API_PORT_BASE + (i * port_spacing)))
       local env_port=$(read_env_port "$dir" "api")
       [ -n "$env_port" ] && api_port="$env_port"
 
@@ -930,7 +1014,9 @@ interactive_workspace_menu() {
     if [ -d "$dir" ]; then
       found=true
       local branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "unknown")
-      local api_port=$((API_PORT_BASE + i))
+      local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
+      [ "$port_spacing" = "null" ] && port_spacing=10
+      local api_port=$((API_PORT_BASE + (i * port_spacing)))
       local env_port=$(read_env_port "$dir" "api")
       [ -n "$env_port" ] && api_port="$env_port"
 
@@ -1153,12 +1239,14 @@ check_and_install_deps() {
 
   if [ "$need_install" = "true" ]; then
     echo -e "${YELLOW}Installing dependencies...${NC}"
-    # Export any env vars from install_env config
+    # Get env vars from install_env config
     local install_env=$(config_get "install_env" "")
+    local run_cmd="$install_cmd"
     if [ -n "$install_env" ] && [ "$install_env" != "null" ]; then
-      export $install_env
+      # Prepend env var to command so it's passed to subprocesses
+      run_cmd="$install_env $install_cmd"
     fi
-    if bash -c "$install_cmd"; then
+    if bash -c "$run_cmd"; then
       touch "$marker"
       echo -e "${GREEN}Dependencies installed${NC}"
     else
@@ -1190,8 +1278,14 @@ check_and_install_deps() {
       if [ "$sub_need_install" = "true" ]; then
         echo -e "${YELLOW}Installing $sub_path dependencies...${NC}"
         cd "$sub_dir"
-        if eval "$sub_install"; then
-          touch "$sub_marker"
+        # Prepend env var to submodule install command too
+        local sub_run_cmd="$sub_install"
+        if [ -n "$install_env" ] && [ "$install_env" != "null" ]; then
+          sub_run_cmd="$install_env $sub_install"
+        fi
+        if bash -c "$sub_run_cmd"; then
+          # Only touch marker if node_modules exists
+          [ -d "node_modules" ] && touch "$sub_marker"
           echo -e "${GREEN}$sub_path dependencies installed${NC}"
         else
           warn "Failed to install $sub_path dependencies"
@@ -1365,8 +1459,21 @@ restart_workspace() {
 
   success "Git reset complete (on branch: $branch_name)"
 
-  # If we're in tmux and the window exists, restart the panes
-  if [ -n "$TMUX" ] && tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
+  # If we're in tmux, restart the panes
+  # Use current window if we're in the workspace dir, otherwise look for ws$num
+  if [ -n "$TMUX" ]; then
+    local current_window=$(tmux display-message -p '#{window_name}' 2>/dev/null)
+    local current_dir=$(pwd)
+    local use_current_window=false
+
+    # If we're in the workspace directory, use current window (even if renamed)
+    if [[ "$current_dir" == "$dir"* ]]; then
+      use_current_window=true
+      window_name="$current_window"
+    fi
+
+    # Check if we can use current window or if ws$num exists
+    if [ "$use_current_window" = true ] || tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
     local port_info=$(get_workspace_ports "$num" "$dir")
     local api_port=$(echo "$port_info" | cut -d: -f1)
     local app_port=$(echo "$port_info" | cut -d: -f2)
