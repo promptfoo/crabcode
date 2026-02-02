@@ -53,8 +53,9 @@ export function generateConfig(options: GenerateConfigOptions): GeneratedConfig 
       config: providerConfig,
     };
   } else {
-    // Custom provider file - just use the file path as string
-    provider = providerType;
+    // Custom provider file - strip 'file:' prefix, use relative path
+    // e.g., 'file:./provider.js' -> './provider.js'
+    provider = providerType.replace(/^file:/, '');
   }
 
   // Build the full config
