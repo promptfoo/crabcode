@@ -134,6 +134,25 @@ crab config scan         # Auto-detect .env files and ports
 crab config              # Show current configuration
 ```
 
+### Promptfoo Target Discovery (`crab pf`)
+
+AI-powered agent that analyzes any target and generates working promptfoo configurations.
+
+```bash
+crab pf install                              # Install the plugin
+crab pf --file target.txt                    # Analyze from file
+crab pf "curl -X POST http://..."            # Analyze curl command
+crab pf --file api.json --output ./config    # Specify output dir
+crab pf --file spec.yaml --verbose           # Show detailed output
+crab pf uninstall                            # Remove the plugin
+```
+
+**Supported formats:** curl commands, OpenAPI specs, Postman collections, Burp exports, plain text descriptions
+
+**Requirements:** Node.js, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+
+The agent probes the target, figures out the protocol (HTTP, WebSocket, polling, etc.), generates the config, and verifies it works.
+
 ### Other Commands
 
 ```bash
