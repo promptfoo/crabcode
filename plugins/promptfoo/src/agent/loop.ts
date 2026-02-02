@@ -275,6 +275,19 @@ async function executeTool(
 
         const configPath = configFile || state.configFile || 'promptfooconfig.yaml';
 
+        // Install dependencies if package.json exists
+        const packageJsonPath = `${outputDir}/package.json`;
+        if (fs.existsSync(packageJsonPath)) {
+          try {
+            execSync(`cd "${outputDir}" && npm install --silent 2>&1`, {
+              timeout: 60000,
+              encoding: 'utf-8',
+            });
+          } catch {
+            // Ignore install errors, will fail in eval if deps missing
+          }
+        }
+
         // Try to run promptfoo eval
         try {
           const output = execSync(

@@ -119,7 +119,7 @@ ${Object.entries(envVars).map(([k, v]) => `#   ${k}: ${v}`).join('\n') || '#   (
 }
 
 /**
- * Write a custom provider file
+ * Write a custom provider file and package.json with dependencies
  */
 export function writeProviderFile(options: {
   code: string;
@@ -153,7 +153,49 @@ export function writeProviderFile(options: {
 
   fs.writeFileSync(filePath, fullCode, 'utf-8');
 
+  // For JS providers, detect and create package.json with dependencies
+  if (filename.endsWith('.js')) {
+    const deps = detectDependencies(code);
+    if (Object.keys(deps).length > 0) {
+      const packageJson = {
+        name: 'promptfoo-provider',
+        version: '1.0.0',
+        type: 'module',
+        dependencies: deps,
+      };
+      const packagePath = path.join(outputDir, 'package.json');
+      fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2), 'utf-8');
+    }
+  }
+
   return filePath;
+}
+
+/**
+ * Detect npm dependencies from import statements in code
+ */
+function detectDependencies(code: string): Record<string, string> {
+  const deps: Record<string, string> = {};
+
+  // Match: import X from 'package' or import { X } from 'package'
+  const importRegex = /import\s+(?:[\w{}\s,*]+)\s+from\s+['"]([^'"./][^'"]*)['"]/g;
+  let match;
+
+  while ((match = importRegex.exec(code)) !== null) {
+    const pkg = match[1];
+    // Skip node built-ins
+    if (!pkg.startsWith('node:')) {
+      // Common package versions
+      const versions: Record<string, string> = {
+        ws: '^8.18.0',
+        'node-fetch': '^3.3.0',
+        axios: '^1.6.0',
+      };
+      deps[pkg] = versions[pkg] || '*';
+    }
+  }
+
+  return deps;
 }
 
 /**
