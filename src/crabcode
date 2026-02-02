@@ -5905,17 +5905,6 @@ handle_wip_for_workspace() {
 handle_pf_command() {
   local PLUGIN_DIR="$CONFIG_DIR/plugins/promptfoo"
 
-  # Check if plugin is installed
-  if [ ! -d "$PLUGIN_DIR" ] || [ ! -f "$PLUGIN_DIR/dist/cli.js" ]; then
-    echo -e "${CYAN}Promptfoo Target Discovery Agent${NC}"
-    echo ""
-    echo "Plugin not installed. Install with:"
-    echo ""
-    echo -e "  ${GREEN}crab pf install${NC}"
-    echo ""
-    return 1
-  fi
-
   case "${1:-}" in
     "install")
       pf_install
@@ -5931,6 +5920,16 @@ handle_pf_command() {
       pf_help
       ;;
     *)
+      # Check if plugin is installed before running
+      if [ ! -d "$PLUGIN_DIR" ] || [ ! -f "$PLUGIN_DIR/dist/cli.js" ]; then
+        echo -e "${CYAN}Promptfoo Target Discovery Agent${NC}"
+        echo ""
+        echo "Plugin not installed. Install with:"
+        echo ""
+        echo -e "  ${GREEN}crab pf install${NC}"
+        echo ""
+        return 1
+      fi
       # Pass all args to the Node.js CLI
       node "$PLUGIN_DIR/dist/cli.js" "$@"
       ;;
