@@ -5940,7 +5940,7 @@ handle_pf_command() {
 pf_install() {
   local PLUGIN_DIR="$CONFIG_DIR/plugins/promptfoo"
   local REPO_URL="https://github.com/promptfoo/crabcode.git"
-  local BRANCH="feat/promptfoo-plugin"
+  local BRANCH="main"
 
   echo -e "${CYAN}Installing Promptfoo Target Discovery Agent...${NC}"
 
