@@ -59,47 +59,65 @@ providers:
 \`\`\`
 
 ### 3. WebSocket
-Requires a custom provider file (use ESM with native APIs):
+Requires a custom provider CLASS (promptfoo expects a class with callApi method):
 \`\`\`javascript
-// provider.js - Note: Use ESM format with native APIs
+// provider.js - MUST be a class with callApi method returning { output }
 import WebSocket from 'ws';
 
-export default async function(prompt, context) {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket('ws://target/chat');
-    ws.on('open', () => ws.send(JSON.stringify({ message: prompt })));
-    ws.on('message', (data) => {
-      const response = JSON.parse(data.toString());
-      ws.close();
-      resolve(response.content);
+export default class WebSocketProvider {
+  constructor(options) {
+    this.config = options.config || {};
+  }
+
+  id() { return 'websocket-provider'; }
+
+  async callApi(prompt) {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket('ws://localhost:8091');
+      ws.on('open', () => ws.send(JSON.stringify({ message: prompt })));
+      ws.on('message', (data) => {
+        const response = JSON.parse(data.toString());
+        if (response.type === 'response') {
+          ws.close();
+          resolve({ output: response.response });
+        }
+      });
+      ws.on('error', (err) => reject(err));
     });
-    ws.on('error', reject);
-  });
-};
+  }
+}
 \`\`\`
 
 ### 4. Async/Polling
-Requires a custom provider file:
+Requires a custom provider CLASS:
 \`\`\`javascript
-// provider.js - Note: Use native fetch (Node.js 18+)
-export default async function(prompt, context) {
-  // 1. Start the job
-  const startRes = await fetch('http://localhost:8092/api/jobs', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt })
-  });
-  const { jobId } = await startRes.json();
-
-  // 2. Poll until complete
-  while (true) {
-    const pollRes = await fetch(\`http://localhost:8092/api/jobs/\${jobId}\`);
-    const data = await pollRes.json();
-    if (data.status === 'completed') return data.result;
-    if (data.status === 'failed') throw new Error(data.error);
-    await new Promise(r => setTimeout(r, 1000));
+// provider.js - MUST be a class with callApi method returning { output }
+export default class PollingProvider {
+  constructor(options) {
+    this.config = options.config || {};
   }
-};
+
+  id() { return 'polling-provider'; }
+
+  async callApi(prompt) {
+    // 1. Start the job
+    const startRes = await fetch('http://localhost:8092/api/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt })
+    });
+    const { jobId } = await startRes.json();
+
+    // 2. Poll until complete
+    while (true) {
+      const pollRes = await fetch(\`http://localhost:8092/api/jobs/\${jobId}\`);
+      const data = await pollRes.json();
+      if (data.status === 'completed') return { output: data.result };
+      if (data.status === 'failed') throw new Error(data.error);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
 \`\`\`
 
 ### 5. Session-based
@@ -217,8 +235,9 @@ redteam:
 3. **Keep provider files simple** - only write custom code when the http provider won't work
 4. **Test before completing** - always run verify() before calling done()
 5. **Be explicit about auth** - document what env vars are needed
-6. **Use ESM format for providers** - use \`export default\` not \`module.exports\`
-7. **Use native fetch** - Node.js 18+ has native fetch, don't require node-fetch
+6. **Custom providers MUST be classes** - promptfoo requires \`export default class Provider { callApi(prompt) { return { output }; } }\`
+7. **callApi must return { output: string }** - not just a string
+8. **Use native fetch** - Node.js 18+ has native fetch, don't require node-fetch
 
 You are the intelligence. Analyze the target carefully and produce configs that work on the first try.`;
 
