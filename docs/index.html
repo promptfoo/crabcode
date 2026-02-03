@@ -136,6 +136,257 @@
       outline-offset: 3px;
     }
 
+    /* ANNOUNCEMENT BANNER */
+    .announce-banner {
+      background: linear-gradient(90deg, var(--ocean-mid) 0%, var(--bg-panel) 50%, var(--ocean-mid) 100%);
+      border-bottom: 1px solid var(--border-subtle);
+      padding: 0.6rem 1rem;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      position: relative;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .announce-banner a {
+      color: var(--seafoam);
+      text-decoration: none;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      transition: color 0.2s ease;
+    }
+
+    .announce-banner a:hover {
+      color: var(--crab-coral);
+    }
+
+    .announce-badge {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--crab-shell) 0%, var(--crab-shell-dark) 100%);
+      color: var(--text-bright);
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      padding: 0.2rem 0.6rem;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+
+    /* CRABQL SECTION */
+    .crabql-section {
+      padding: 8rem 0;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .crabql-section::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background:
+        radial-gradient(ellipse at 20% 50%, rgba(78, 205, 196, 0.06) 0%, transparent 60%),
+        radial-gradient(ellipse at 80% 50%, rgba(232, 74, 35, 0.06) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .crabql-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: center;
+    }
+
+    @media (max-width: 768px) {
+      .crabql-grid {
+        grid-template-columns: 1fr;
+        gap: 2rem;
+      }
+    }
+
+    .crabql-info {
+      position: relative;
+    }
+
+    .crabql-label {
+      font-size: 0.7rem;
+      color: var(--seafoam);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .crabql-label .coming-soon-tag {
+      background: linear-gradient(135deg, var(--crab-shell) 0%, var(--crab-shell-dark) 100%);
+      color: var(--text-bright);
+      font-size: 0.55rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 3px;
+      letter-spacing: 0.08em;
+    }
+
+    .crabql-title {
+      font-family: 'Anybody', sans-serif;
+      font-weight: 800;
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      color: var(--text-bright);
+      letter-spacing: -0.02em;
+      margin-bottom: 1rem;
+    }
+
+    .crabql-title .ql {
+      color: var(--seafoam);
+      text-shadow: var(--glow-seafoam);
+    }
+
+    .crabql-desc {
+      color: var(--text-dim);
+      font-size: 0.9rem;
+      line-height: 1.8;
+      margin-bottom: 1.5rem;
+    }
+
+    .crabql-features {
+      list-style: none;
+      padding: 0;
+    }
+
+    .crabql-features li {
+      padding: 0.5rem 0;
+      color: var(--text-dim);
+      font-size: 0.85rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    .crabql-features li .crabql-icon {
+      color: var(--seafoam);
+      flex-shrink: 0;
+      font-size: 0.75rem;
+      margin-top: 0.15rem;
+    }
+
+    .crabql-features li code {
+      color: var(--crab-coral);
+      background: rgba(232, 74, 35, 0.1);
+      padding: 0.1em 0.35em;
+      border-radius: 3px;
+      font-size: 0.85em;
+    }
+
+    .crabql-preview {
+      background: var(--bg-panel);
+      border: 2px solid var(--border-subtle);
+      border-radius: 6px;
+      overflow: hidden;
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4);
+      position: relative;
+    }
+
+    .crabql-preview:hover {
+      border-color: rgba(78, 205, 196, 0.4);
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.4), var(--glow-seafoam);
+    }
+
+    .crabql-preview-bar {
+      background: var(--bg-void);
+      padding: 0.6rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .crabql-preview-bar .dots {
+      display: flex;
+      gap: 5px;
+    }
+
+    .crabql-preview-bar .dots span {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .crabql-preview-bar .dots span:nth-child(1) { background: var(--crab-shell); }
+    .crabql-preview-bar .dots span:nth-child(2) { background: var(--crab-coral); }
+    .crabql-preview-bar .dots span:nth-child(3) { background: var(--seafoam); }
+
+    .crabql-preview-bar .filename {
+      color: var(--text-dim);
+      font-size: 0.65rem;
+      margin-left: 0.75rem;
+    }
+
+    .crabql-preview-body {
+      padding: 1.25rem;
+      font-size: 0.75rem;
+      line-height: 1.7;
+      overflow-x: auto;
+    }
+
+    .crabql-preview-body .kw { color: var(--seafoam); }
+    .crabql-preview-body .fn { color: var(--crab-coral); }
+    .crabql-preview-body .str { color: var(--sand); }
+    .crabql-preview-body .cm { color: var(--text-dim); font-style: italic; }
+    .crabql-preview-body .op { color: var(--text-main); }
+    .crabql-preview-body .ln {
+      color: rgba(139, 154, 168, 0.4);
+      user-select: none;
+      display: inline-block;
+      width: 2em;
+      text-align: right;
+      margin-right: 1em;
+    }
+
+    .crabql-coming-soon {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+      padding: 0.75rem 1.25rem;
+      background: rgba(78, 205, 196, 0.08);
+      border: 1px solid rgba(78, 205, 196, 0.25);
+      border-radius: 4px;
+      color: var(--seafoam);
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    .crabql-coming-soon .pulse-dot {
+      width: 6px;
+      height: 6px;
+      background: var(--seafoam);
+      border-radius: 50%;
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 0.4; box-shadow: 0 0 0 0 rgba(78, 205, 196, 0.4); }
+      50% { opacity: 1; box-shadow: 0 0 8px 2px rgba(78, 205, 196, 0.3); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .crabql-coming-soon .pulse-dot {
+        animation: none;
+        opacity: 1;
+      }
+    }
+
     /* HERO SECTION */
     .hero {
       min-height: 100vh;
@@ -893,93 +1144,6 @@
       }
     }
 
-    /* BUZZWORD BINGO */
-    .buzzword-btn {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: var(--bg-panel);
-      border: 1px solid var(--border-subtle);
-      border-radius: 6px;
-      padding: 0.5rem 0.75rem;
-      font-size: 0.7rem;
-      color: var(--text-dim);
-      cursor: pointer;
-      z-index: 1002;
-      transition: all 0.2s ease;
-      font-family: inherit;
-    }
-
-    .buzzword-btn:hover {
-      border-color: var(--crab-shell);
-      color: var(--crab-coral);
-      box-shadow: var(--glow-crab);
-    }
-
-    .buzzword-highlight {
-      background: rgba(232, 74, 35, 0.3) !important;
-      outline: 2px solid var(--crab-shell);
-      outline-offset: 2px;
-      animation: buzzword-pulse 0.5s ease;
-    }
-
-    @keyframes buzzword-pulse {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.02); }
-    }
-
-    .buzzword-counter {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      background: var(--bg-panel);
-      border: 2px solid var(--crab-shell);
-      border-radius: 12px;
-      padding: 2rem 3rem;
-      text-align: center;
-      z-index: 10001;
-      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
-    }
-
-    .buzzword-counter h3 {
-      font-family: 'Anybody', sans-serif;
-      font-size: 1.5rem;
-      color: var(--crab-shell);
-      margin-bottom: 0.5rem;
-    }
-
-    .buzzword-counter .count {
-      font-size: 3rem;
-      font-weight: bold;
-      color: var(--crab-coral);
-    }
-
-    .buzzword-counter .label {
-      color: var(--text-dim);
-      font-size: 0.8rem;
-      margin-top: 0.5rem;
-    }
-
-    .buzzword-counter button {
-      margin-top: 1rem;
-      padding: 0.5rem 1rem;
-      background: var(--crab-shell);
-      border: none;
-      border-radius: 4px;
-      color: white;
-      cursor: pointer;
-      font-family: inherit;
-      font-size: 0.8rem;
-    }
-
-    @media (max-width: 768px) {
-      .buzzword-btn {
-        bottom: 100px;
-        right: 10px;
-      }
-    }
-
     /* FOOTER */
     footer {
       padding: 5rem 0;
@@ -1326,6 +1490,13 @@
   </style>
 </head>
 <body>
+  <!-- ANNOUNCEMENT BANNER -->
+  <div class="announce-banner">
+    <span class="announce-badge">Coming Soon</span>
+    <span>Introducing <strong>Crab<span style="color: var(--seafoam);">QL</span></strong> — proactive code integrity assurance for mission-critical pipelines.</span>
+    <a href="#crabql">Learn more &rarr;</a>
+  </div>
+
   <!-- HERO -->
   <section class="hero">
     <div class="hero-grid"></div>
@@ -1524,6 +1695,75 @@
     </div>
   </section>
 
+  <!-- CRABQL -->
+  <section class="crabql-section" id="crabql">
+    <div class="container">
+      <div class="crabql-grid">
+        <div class="crabql-info">
+          <div class="crabql-label">
+            <span>// Next from CrabCode</span>
+            <span class="coming-soon-tag">Coming Soon</span>
+          </div>
+          <h2 class="crabql-title">Crab<span class="ql">QL</span></h2>
+          <p class="crabql-desc">
+            Next-generation code integrity assurance platform purpose-built for regulated, compliance-forward engineering organizations.
+            CrabQL enables holistic vulnerability surface mapping through a declarative query paradigm — transforming your codebase
+            into a fully auditable, continuously-assessed risk domain. Shift left at scale. Drive measurable security posture improvements across every sprint.
+          </p>
+          <ul class="crabql-features">
+            <li>
+              <span class="crabql-icon">&#9656;</span>
+              Turnkey compliance orchestration with pre-built governance packs aligned to OWASP Top 10, CWE/SANS 25, SOC 2 Type II, and ISO 27001 control frameworks
+            </li>
+            <li>
+              <span class="crabql-icon">&#9656;</span>
+              Cross-boundary taint propagation analysis with <code>propagates_through</code> semantics — 360° visibility into data flow risk vectors
+            </li>
+            <li>
+              <span class="crabql-icon">&#9656;</span>
+              Seamless CI/CD integration via <code>crab pipeline audit</code> — zero-config SARIF output enables frictionless DevSecOps alignment
+            </li>
+            <li>
+              <span class="crabql-icon">&#9656;</span>
+              Sub-second incremental analysis powered by workspace-aware differential indexing — no build overhead, no developer friction
+            </li>
+            <li>
+              <span class="crabql-icon">&#9656;</span>
+              Executive-ready risk dashboarding with customizable KPI rollups for quarterly security posture reporting
+            </li>
+          </ul>
+          <div class="crabql-coming-soon">
+            <span class="pulse-dot"></span>
+            Entering Private Beta — Waitlist Opening Q2 2026
+          </div>
+        </div>
+
+        <div class="crabql-preview">
+          <div class="crabql-preview-bar">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <span class="filename">supply-chain-integrity-posture.crabql</span>
+          </div>
+          <div class="crabql-preview-body">
+            <div><span class="ln">1</span><span class="cm">// Holistic ingress vector surface mapping</span></div>
+            <div><span class="ln">2</span><span class="cm">// Governance Pack: SOC2-T2 | Sprint: Q2-2026</span></div>
+            <div><span class="ln">3</span><span class="kw">from</span> <span class="fn">TrustBoundary</span>.<span class="fn">ingress_vector</span>() <span class="kw">as</span> surface</div>
+            <div><span class="ln">4</span><span class="kw">where</span> surface.<span class="fn">propagates_through</span>(</div>
+            <div><span class="ln">5</span>&nbsp;&nbsp;<span class="fn">DataFlow</span>.<span class="fn">cross_boundary_taint</span>({</div>
+            <div><span class="ln">6</span>&nbsp;&nbsp;&nbsp;&nbsp;sanitizers: <span class="fn">Governance</span>.<span class="fn">approved_controls</span>(),</div>
+            <div><span class="ln">7</span>&nbsp;&nbsp;&nbsp;&nbsp;compliance: <span class="str">"SOC2-CC6.1"</span></div>
+            <div><span class="ln">8</span>&nbsp;&nbsp;})</div>
+            <div><span class="ln">9</span>)</div>
+            <div><span class="ln">10</span><span class="kw">reaches</span> <span class="fn">CriticalPath</span>.<span class="fn">business_logic</span>()</div>
+            <div><span class="ln">11</span><span class="kw">select</span> surface,</div>
+            <div><span class="ln">12</span>&nbsp;&nbsp;<span class="kw">severity</span>: <span class="fn">RiskMatrix</span>.<span class="fn">auto_classify</span>(),</div>
+            <div><span class="ln">13</span>&nbsp;&nbsp;<span class="kw">escalate</span>: <span class="str">"stakeholder-security-review"</span>,</div>
+            <div><span class="ln">14</span>&nbsp;&nbsp;<span class="kw">kpi_impact</span>: <span class="str">"MTTR, posture-score"</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <!-- MANIFESTO -->
   <section class="manifesto">
     <div class="container manifesto-content">
@@ -1637,9 +1877,6 @@
     <div class="crab-mood-face">( •_•)</div>
     <div class="crab-mood-status">watching</div>
   </div>
-
-  <!-- BUZZWORD BINGO BUTTON -->
-  <button class="buzzword-btn" id="buzzwordBtn">🎯 Buzzword Bingo</button>
 
   <!-- FOOTER -->
   <footer>
@@ -1982,7 +2219,7 @@
     }, { threshold: 0.3 });
 
     // Observe major sections
-    document.querySelectorAll('.bento-section, .metrics-section, .layout-section, .manifesto, .commands-section').forEach(section => {
+    document.querySelectorAll('.bento-section, .metrics-section, .layout-section, .crabql-section, .manifesto, .commands-section').forEach(section => {
       sectionObserver.observe(section);
     });
 
@@ -2001,7 +2238,6 @@
       hovering: { face: '( ^_^)', status: 'ooh!' },
       clicking: { face: '( >_<)', status: 'pinch!' },
       copying: { face: '( ★_★)', status: 'copied!' },
-      bingo: { face: '( $_$)', status: 'synergy!' },
       sleeping: { face: '( -_-) zzz', status: 'sleepy' },
       excited: { face: '\\(^o^)/', status: 'yay!' }
     };
@@ -2117,91 +2353,6 @@
         </div>
       `;
       item.appendChild(previewEl);
-    });
-
-    // BUZZWORD BINGO - highlight enterprise buzzwords
-    const buzzwords = [
-      'operational excellence', 'velocity', 'synergies', 'enterprise-grade',
-      'stakeholder', 'alignment', 'cross-functional', 'scalable', 'leverage',
-      'actionable', 'deliverables', 'ecosystem', 'holistic', 'paradigm',
-      'streamline', 'optimize', 'bandwidth', 'deep dive', 'low-hanging fruit',
-      'move the needle', 'circle back', 'take offline', 'value-add',
-      'best practices', 'core competency', 'mission-critical', 'proactive',
-      'robust', 'seamless', 'turnkey', 'world-class', 'cutting-edge',
-      'next-generation', 'future-proof', 'agile', 'disruptive', 'innovative',
-      'transformative', 'sustainable', 'competitive advantage', 'ROI',
-      'KPI', 'quarterly', 'business outcomes', 'value delivery', 'friction',
-      'orchestration', 'provisioning', 'operationalized', 'lifecycle',
-      'governance', 'compliance', 'SOC 2', 'ISO 27001', 'production-hardened',
-      'horizontally-scalable', 'zero-latency', 'hermetic', 'ramp-up',
-      'MTTR', 'NPS', 'headcount', 'sprint velocity'
-    ];
-
-    let bingoActive = false;
-    let highlightedElements = [];
-
-    document.getElementById('buzzwordBtn').addEventListener('click', () => {
-      if (bingoActive) {
-        // Clear highlights
-        highlightedElements.forEach(el => el.classList.remove('buzzword-highlight'));
-        highlightedElements = [];
-        document.querySelectorAll('.buzzword-counter').forEach(el => el.remove());
-        bingoActive = false;
-        return;
-      }
-
-      bingoActive = true;
-      setMood('bingo', 5000);
-
-      // Find and highlight buzzwords
-      let count = 0;
-      const walker = document.createTreeWalker(
-        document.body,
-        NodeFilter.SHOW_TEXT,
-        null,
-        false
-      );
-
-      const textNodes = [];
-      while (walker.nextNode()) textNodes.push(walker.currentNode);
-
-      const regex = new RegExp(`\\b(${buzzwords.join('|')})\\b`, 'gi');
-      const matchedParents = new Set();
-
-      textNodes.forEach(node => {
-        if (node.textContent.match(regex)) {
-          const parent = node.parentElement;
-          if (parent && !parent.classList.contains('buzzword-btn') &&
-              !parent.closest('script') && !parent.closest('style') &&
-              !matchedParents.has(parent)) {
-            matchedParents.add(parent);
-          }
-        }
-      });
-
-      // Highlight with animation
-      let delay = 0;
-      matchedParents.forEach(el => {
-        setTimeout(() => {
-          el.classList.add('buzzword-highlight');
-          highlightedElements.push(el);
-          count++;
-        }, delay);
-        delay += 50;
-      });
-
-      // Show counter after highlighting
-      setTimeout(() => {
-        const counter = document.createElement('div');
-        counter.className = 'buzzword-counter';
-        counter.innerHTML = `
-          <h3>🎯 Synergy Detected!</h3>
-          <div class="count">${matchedParents.size}</div>
-          <div class="label">enterprise buzzwords found</div>
-          <button onclick="this.parentElement.remove()">Leverage This Insight</button>
-        `;
-        document.body.appendChild(counter);
-      }, delay + 500);
     });
 
     // Initialize mood
