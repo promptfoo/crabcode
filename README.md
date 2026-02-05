@@ -7,7 +7,7 @@
   <      >
 ```
 
-A lightning-fast tmux-based workspace manager for multi-repo development. Start a full dev environment in seconds.
+A lightning-fast tmux-based workspace manager for multi-repo development. Manage multiple projects, start full dev environments in seconds.
 
 ## Quick Start
 
@@ -19,9 +19,9 @@ brew install tmux yq    # macOS
 # 2. Install crabcode
 curl -fsSL https://raw.githubusercontent.com/promptfoo/crabcode/main/install.sh | bash
 
-# 3. Setup (2 questions: repo path + workspace dir)
+# 3. Register your project (3 questions: repo path, alias, workspace dir)
 cd ~/Dev/my-project
-crab init
+crab init              # → alias: myproj
 
 # 4. Auto-detect .env files and ports
 crab config scan
@@ -38,6 +38,14 @@ Run `crab ws 1` and get:
 - Isolated ports per workspace (auto-detected from .env files)
 - Tmux window with terminal, server, and your preferred tools
 - Shared volume for local experiments (`.local/`)
+
+Managing multiple projects? Each gets its own alias:
+
+```bash
+crab @pf ws 1          # promptfoo-cloud workspace
+crab @cb ws 1          # crabcode workspace
+crab projects          # list all registered projects
+```
 
 ## Commands
 
@@ -116,7 +124,7 @@ crab slack users                 # List workspace users
 crab slack users mike            # Search by name
 ```
 
-**Setup:** Add to `~/.crabcode/config.yaml`:
+**Setup:** Add to your project config (`~/.crabcode/projects/<alias>.yaml`):
 
 ```yaml
 slack:
@@ -126,10 +134,28 @@ slack:
 
 Messages appear with 🦀 icon and show `[Your Name] message` so recipients know who sent it.
 
+### Multi-Project Commands
+
+Manage multiple repos from a single crabcode install. Each project gets an alias.
+
+```bash
+crab init                # Register a new project (asks for alias)
+crab init -t <template>  # Register with a template
+crab @pf ws 1            # Open workspace 1 for project "pf"
+crab @cb config          # Show config for project "cb"
+crab ws 1                # Uses default project (or detects from cwd)
+crab projects            # List all registered projects
+crab projects rm <alias> # Remove a project registration
+crab default pf          # Set default project
+crab default             # Show current default
+```
+
+Project configs live in `~/.crabcode/projects/<alias>.yaml`. When you run commands from a workspace directory, crabcode auto-detects which project you're in.
+
 ### Config Commands
 
 ```bash
-crab init                # Minimal setup (2 questions)
+crab init                # Register a project (3 questions)
 crab config scan         # Auto-detect .env files and ports
 crab config              # Show current configuration
 ```
@@ -164,16 +190,19 @@ crab cheat               # Show cheat sheet
 
 ## Setup Flow
 
-### 1. Initialize (minimal)
+### 1. Register your project
 
 ```bash
 cd ~/Dev/my-project
 crab init
 ```
 
-You'll be asked 2 questions:
+You'll be asked 3 questions:
 - **Main repo path** - where your project lives (defaults to current dir)
+- **Project alias** - short name like `pf`, `cb` (defaults to repo dirname)
 - **Workspace directory** - where to create worktrees (defaults to `<repo>-workspaces`)
+
+This creates `~/.crabcode/projects/<alias>.yaml`.
 
 ### 2. Scan for ports
 
@@ -185,17 +214,36 @@ This scans your repo for `.env` and `.env.example` files, finds port variables, 
 
 ### 3. Customize config
 
-Edit `~/.crabcode/config.yaml` to set:
+Edit `~/.crabcode/projects/<alias>.yaml` to set:
 - **Layout panes** - your dev server command, main tool
 - **Shared volume** - persistent storage across resets
 - **Submodules** - if your project has git submodules
 
+### 4. Add more projects
+
+```bash
+cd ~/Dev/another-project
+crab init              # → alias: another
+crab projects          # see both projects
+```
+
 ## Configuration
 
-Config file: `~/.crabcode/config.yaml`
+```
+~/.crabcode/
+  config.yaml              # global prefs (default_project)
+  projects/
+    pf.yaml                # per-project config
+    cb.yaml                # per-project config
+  wip/
+    pf/                    # per-project WIP isolation
+    cb/
+```
+
+Per-project config (`~/.crabcode/projects/<alias>.yaml`):
 
 ```yaml
-session_name: crab
+session_name: pf
 workspace_base: ~/Dev/my-project-workspaces
 main_repo: ~/Dev/my-project
 
@@ -330,13 +378,13 @@ With prefix `Ctrl+a`:
 5. **Setup crabcode:**
    ```bash
    cd ~/Dev/your-project
-   crab init              # 2 questions: repo path + workspace dir
+   crab init              # 3 questions: repo path, alias, workspace dir
    crab config scan       # auto-detect .env files and ports
    ```
 
 6. **Edit config for your project:**
    ```bash
-   # Set your layout commands in ~/.crabcode/config.yaml
+   # Set your layout commands in ~/.crabcode/projects/<alias>.yaml
    # - server pane: your dev server (e.g., pnpm dev)
    # - main pane: your main tool (e.g., claude)
    ```
@@ -354,7 +402,14 @@ With branches, switching context means stashing changes, checking out, reinstall
 
 ### Can I use crabcode with multiple projects?
 
-Yes! Each project gets its own `~/.crabcode/config.yaml`. Run `crab init` in each project directory. Crabcode detects which project you're in based on your current directory.
+Yes! Each project gets an alias and its own config at `~/.crabcode/projects/<alias>.yaml`. Run `crab init` in each project directory. Use `crab @alias <cmd>` to target a specific project, or just run commands from a workspace directory — crabcode auto-detects which project you're in.
+
+```bash
+crab @pf ws 1          # explicit project
+crab ws 1              # uses default or auto-detects from cwd
+crab projects          # see all registered projects
+crab default pf        # set default project
+```
 
 ### How do I clean up old workspaces?
 

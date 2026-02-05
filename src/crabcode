@@ -6083,6 +6083,23 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  MULTI-PROJECT (crab @alias ...)                                             ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab init              Register a new project (asks for alias)               ║
+║  crab init -t <tpl>     Register with template (e.g., promptfoo-cloud)        ║
+║  crab @pf ws 1          Open workspace 1 for project "pf"                    ║
+║  crab @cb config        Show config for project "cb"                          ║
+║  crab ws 1              Uses default project (or detects from cwd)            ║
+║  crab projects          List all registered projects                          ║
+║  crab projects rm <a>   Remove a project registration                         ║
+║  crab default pf        Set default project                                   ║
+║  crab default           Show current default                                  ║
+║                                                                               ║
+║  Config: ~/.crabcode/projects/<alias>.yaml                                   ║
+║  Auto-detect: crab figures out which project from your cwd                    ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  WORKSPACE COMMANDS (crab ws ...)                                             ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab ws               Interactive menu (list + actions)                      ║
@@ -6145,19 +6162,8 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
-║  MULTI-PROJECT (crab @alias ...)                                             ║
-║  ────────────────────────────────────────────────────────────────────────     ║
-║  crab @pf ws 1          Open workspace 1 for project "pf"                    ║
-║  crab ws 1              Uses default project                                  ║
-║  crab projects          List all registered projects                          ║
-║  crab default pf        Set default project                                   ║
-║  crab init              Register a new project (asks for alias)               ║
-║                                                                               ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
 ║  OTHER COMMANDS                                                               ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
-║  crab init             Minimal setup (2 questions)                            ║
 ║  crab config scan      Auto-detect .env files and ports                       ║
 ║  crab config           Show current configuration                             ║
 ║  crab doctor           Diagnose common issues                                 ║
