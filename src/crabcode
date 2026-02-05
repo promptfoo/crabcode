@@ -27,10 +27,13 @@
 
 set -e
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
+PROJECTS_DIR="$CONFIG_DIR/projects"
+GLOBAL_CONFIG="$CONFIG_DIR/config.yaml"
+PROJECT_ALIAS=""
 
 # Colors
 RED='\033[0;31m'
@@ -114,7 +117,11 @@ validate_config() {
   local errors=0
 
   if ! config_exists; then
-    error "No config file found at $CONFIG_FILE"
+    if [ -n "${PROJECT_ALIAS:-}" ]; then
+      error "Config not found for project @$PROJECT_ALIAS at $CONFIG_FILE"
+    else
+      error "No config file found at $CONFIG_FILE"
+    fi
     echo "Run 'crabcode init' to create one."
     exit 1
   fi
@@ -170,6 +177,206 @@ expand_path() {
 }
 
 # =============================================================================
+# Multi-Project Resolution
+# =============================================================================
+
+# Resolve project from @alias argument or fall back to default
+# Sets CONFIG_FILE and PROJECT_ALIAS
+resolve_project() {
+  local arg="${1:-}"
+
+  if [[ "$arg" == @* ]]; then
+    local alias="${arg#@}"
+    local project_file="$PROJECTS_DIR/${alias}.yaml"
+    if [ ! -f "$project_file" ]; then
+      error "No project registered with alias: @$alias"
+      echo "Run 'crab projects' to see registered projects."
+      exit 1
+    fi
+    CONFIG_FILE="$project_file"
+    PROJECT_ALIAS="$alias"
+    return
+  fi
+
+  # No @alias given — try to resolve default
+  resolve_default_project
+}
+
+# Resolve the default project when no @alias is given
+# Falls back to legacy config.yaml if no projects/ dir
+resolve_default_project() {
+  # If projects/ dir doesn't exist or is empty, keep legacy CONFIG_FILE
+  if [ ! -d "$PROJECTS_DIR" ] || [ -z "$(ls -A "$PROJECTS_DIR" 2>/dev/null)" ]; then
+    return
+  fi
+
+  # Check GLOBAL_CONFIG for default_project
+  local default_alias=""
+  if [ -f "$GLOBAL_CONFIG" ]; then
+    default_alias=$(yq -r '.default_project // ""' "$GLOBAL_CONFIG" 2>/dev/null)
+    [ "$default_alias" = "null" ] && default_alias=""
+  fi
+
+  if [ -n "$default_alias" ]; then
+    local project_file="$PROJECTS_DIR/${default_alias}.yaml"
+    if [ -f "$project_file" ]; then
+      CONFIG_FILE="$project_file"
+      PROJECT_ALIAS="$default_alias"
+      return
+    fi
+    warn "Default project '@$default_alias' not found, ignoring."
+  fi
+
+  # If exactly 1 project exists, auto-select it
+  local count=0
+  local single_file=""
+  for f in "$PROJECTS_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    count=$((count + 1))
+    single_file="$f"
+  done
+
+  if [ "$count" -eq 1 ]; then
+    local alias=$(basename "$single_file" .yaml)
+    CONFIG_FILE="$single_file"
+    PROJECT_ALIAS="$alias"
+    return
+  fi
+
+  # Multiple projects, no default — keep legacy CONFIG_FILE (will fail on validate if needed)
+}
+
+# List all registered project aliases
+list_project_aliases() {
+  if [ ! -d "$PROJECTS_DIR" ]; then
+    return
+  fi
+  for f in "$PROJECTS_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    local alias=$(basename "$f" .yaml)
+    local repo=$(yq -r '.main_repo // ""' "$f" 2>/dev/null)
+    echo "@$alias ($repo)"
+  done
+}
+
+# Try to resolve the correct project from the current working directory
+# Scans all project configs to find one whose workspace_base matches cwd
+resolve_project_from_cwd() {
+  local cwd=$(pwd)
+
+  if [ ! -d "$PROJECTS_DIR" ]; then
+    return 1
+  fi
+
+  for f in "$PROJECTS_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    local ws_base=$(yq -r '.workspace_base // ""' "$f" 2>/dev/null)
+    [ -z "$ws_base" ] || [ "$ws_base" = "null" ] && continue
+    # Expand ~ in workspace_base
+    ws_base="${ws_base/#\~/$HOME}"
+
+    if [[ "$cwd" == "$ws_base"* ]]; then
+      local alias=$(basename "$f" .yaml)
+      CONFIG_FILE="$f"
+      PROJECT_ALIAS="$alias"
+      return 0
+    fi
+
+    # Also check main_repo (user might be in the main repo dir)
+    local repo=$(yq -r '.main_repo // ""' "$f" 2>/dev/null)
+    [ -z "$repo" ] || [ "$repo" = "null" ] && continue
+    repo="${repo/#\~/$HOME}"
+
+    if [[ "$cwd" == "$repo"* ]]; then
+      local alias=$(basename "$f" .yaml)
+      CONFIG_FILE="$f"
+      PROJECT_ALIAS="$alias"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+# Check if we're in legacy single-project mode
+is_legacy_config() {
+  # Legacy = config.yaml has main_repo AND projects/ dir is empty/missing
+  if [ ! -f "$CONFIG_DIR/config.yaml" ]; then
+    return 1
+  fi
+  local has_main_repo=$(yq -r '.main_repo // ""' "$CONFIG_DIR/config.yaml" 2>/dev/null)
+  if [ -z "$has_main_repo" ] || [ "$has_main_repo" = "null" ]; then
+    return 1
+  fi
+  # Check projects dir
+  if [ -d "$PROJECTS_DIR" ] && [ -n "$(ls -A "$PROJECTS_DIR" 2>/dev/null)" ]; then
+    return 1
+  fi
+  return 0
+}
+
+# Prompt user to migrate legacy config.yaml → projects/<alias>.yaml
+check_legacy_migration() {
+  echo -e "${CYAN}Multi-project support detected.${NC}"
+  echo ""
+  echo "Your config at ~/.crabcode/config.yaml can be migrated to the new"
+  echo "per-project format. This enables managing multiple repos with crab."
+  echo ""
+  read -p "Migrate now? [Y/n]: " migrate
+  if [ "$migrate" = "n" ] || [ "$migrate" = "N" ]; then
+    return
+  fi
+
+  # Ask for alias
+  local repo_path=$(yq -r '.main_repo // ""' "$CONFIG_DIR/config.yaml" 2>/dev/null)
+  local default_alias=$(basename "$repo_path" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
+  echo ""
+  read -p "Project alias [$default_alias]: " alias_input
+  alias_input=${alias_input:-$default_alias}
+
+  # Validate alias
+  if ! [[ "$alias_input" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    error "Alias must be alphanumeric (dashes and underscores allowed)"
+    return 1
+  fi
+
+  # Create projects dir and copy config
+  mkdir -p "$PROJECTS_DIR"
+  cp "$CONFIG_DIR/config.yaml" "$PROJECTS_DIR/${alias_input}.yaml"
+
+  # Rename tmux session if it's running under the old name
+  local old_session=$(yq -r '.session_name // ""' "$PROJECTS_DIR/${alias_input}.yaml" 2>/dev/null)
+  if [ -n "$old_session" ] && [ "$old_session" != "null" ] && [ "$old_session" != "$alias_input" ]; then
+    if tmux has-session -t "$old_session" 2>/dev/null; then
+      tmux rename-session -t "$old_session" "$alias_input" 2>/dev/null && \
+        echo -e "  ${GREEN}Renamed tmux session: $old_session → $alias_input${NC}"
+    fi
+  fi
+
+  # Update session_name in the project config to use the alias
+  yq -i ".session_name = \"$alias_input\"" "$PROJECTS_DIR/${alias_input}.yaml"
+
+  # Backup old config and create new global config
+  cp "$CONFIG_DIR/config.yaml" "$CONFIG_DIR/config.yaml.bak"
+
+  # Write new global config with just default_project
+  cat > "$GLOBAL_CONFIG" << EOF
+# Crabcode Global Configuration
+default_project: $alias_input
+EOF
+
+  CONFIG_FILE="$PROJECTS_DIR/${alias_input}.yaml"
+  PROJECT_ALIAS="$alias_input"
+
+  echo ""
+  success "Migrated to @$alias_input"
+  echo "  Project config: $PROJECTS_DIR/${alias_input}.yaml"
+  echo "  Backup: ~/.crabcode/config.yaml.bak"
+  echo "  Default set to: @$alias_input"
+  echo ""
+}
+
+# =============================================================================
 # Config Variables (loaded lazily)
 # =============================================================================
 
@@ -203,6 +410,11 @@ load_config() {
   SHARED_VOLUME_ENABLED=$(config_get "shared_volume.enabled" "true")
 
   _config_loaded=true
+
+  # WIP isolation: per-project WIP directories
+  if [ -n "${PROJECT_ALIAS:-}" ]; then
+    WIP_BASE="$CONFIG_DIR/wip/$PROJECT_ALIAS"
+  fi
 }
 
 # =============================================================================
@@ -3519,7 +3731,7 @@ template_promptfoo_cloud() {
 # Crabcode Configuration - Promptfoo Cloud Template
 # Generated by 'crabcode init --template promptfoo-cloud'
 
-session_name: crab
+session_name: ALIAS_PLACEHOLDER
 workspace_base: WORKSPACE_BASE_PLACEHOLDER
 main_repo: MAIN_REPO_PLACEHOLDER
 
@@ -3601,6 +3813,7 @@ apply_template() {
   local template_name="$1"
   local main_repo="$2"
   local workspace_base="$3"
+  local alias="${4:-crab}"
 
   local template_content=""
   case "$template_name" in
@@ -3613,10 +3826,11 @@ apply_template() {
       ;;
   esac
 
-  mkdir -p "$CONFIG_DIR"
+  mkdir -p "$PROJECTS_DIR"
   echo "$template_content" \
     | sed "s|MAIN_REPO_PLACEHOLDER|$main_repo|g" \
     | sed "s|WORKSPACE_BASE_PLACEHOLDER|$workspace_base|g" \
+    | sed "s|ALIAS_PLACEHOLDER|$alias|g" \
     > "$CONFIG_FILE"
 }
 
@@ -3636,10 +3850,15 @@ show_templates() {
 show_init() {
   # Parse arguments
   local template_name=""
+  local alias_input=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --template|-t)
         template_name="$2"
+        shift 2
+        ;;
+      --alias|-a)
+        alias_input="$2"
         shift 2
         ;;
       --list-templates)
@@ -3653,61 +3872,6 @@ show_init() {
   done
 
   echo -e "${CYAN}Crabcode Setup${NC}"
-  echo ""
-
-  # Check for existing global config
-  if config_exists; then
-    echo -e "${YELLOW}Config already exists at $CONFIG_FILE${NC}"
-    read -p "Overwrite? [y/N]: " confirm
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-      echo "Cancelled."
-      return
-    fi
-  fi
-
-  # Check for project-level config in current directory
-  local project_config="$(pwd)/.crabcode.yaml"
-  if [ -f "$project_config" ]; then
-    echo -e "${GREEN}Found project config: .crabcode.yaml${NC}"
-    echo ""
-    echo "This project has a crabcode config. Use it for your global setup?"
-    read -p "  [Y/n]: " use_project
-    if [ "$use_project" != "n" ] && [ "$use_project" != "N" ]; then
-      mkdir -p "$CONFIG_DIR"
-      cp "$project_config" "$CONFIG_FILE"
-
-      # Update paths to absolute if they use relative paths
-      local current_dir=$(pwd)
-
-      # Check if main_repo needs updating (if it's relative or placeholder)
-      local main_repo_val=$(yq -r '.main_repo // ""' "$CONFIG_FILE" 2>/dev/null)
-      if [ -z "$main_repo_val" ] || [ "$main_repo_val" = "null" ] || [[ "$main_repo_val" == "~/"* ]] || [[ "$main_repo_val" == "./"* ]]; then
-        yq -i ".main_repo = \"$current_dir\"" "$CONFIG_FILE"
-        echo -e "  ${YELLOW}Set main_repo to: $current_dir${NC}"
-      fi
-
-      # Check if workspace_base needs updating
-      local ws_base_val=$(yq -r '.workspace_base // ""' "$CONFIG_FILE" 2>/dev/null)
-      if [ -z "$ws_base_val" ] || [ "$ws_base_val" = "null" ]; then
-        local repo_name=$(basename "$current_dir")
-        local default_base="$(dirname "$current_dir")/${repo_name}-workspaces"
-        yq -i ".workspace_base = \"$default_base\"" "$CONFIG_FILE"
-        echo -e "  ${YELLOW}Set workspace_base to: $default_base${NC}"
-      fi
-
-      echo ""
-      success "Config created at $CONFIG_FILE"
-      echo ""
-      echo -e "${CYAN}Next steps:${NC}"
-      echo "  1. Review config: crab config"
-      echo "  2. Run 'crab config scan' if you need to detect ports"
-      echo "  3. Run 'crab ws 1' to create your first workspace"
-      return
-    fi
-    echo ""
-  fi
-
-  echo "Let's set up crabcode for your project."
   echo ""
 
   # Main repo
@@ -3732,6 +3896,35 @@ show_init() {
     fi
   fi
 
+  # Project alias
+  if [ -z "$alias_input" ]; then
+    local default_alias=$(basename "$main_repo" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g')
+    echo ""
+    echo -e "Project alias (used in ${GREEN}crab @alias ws 1${NC})"
+    read -p "  [$default_alias]: " alias_input
+    alias_input=${alias_input:-$default_alias}
+  fi
+
+  # Validate alias
+  if ! [[ "$alias_input" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    error "Alias must be alphanumeric (dashes and underscores allowed)"
+    return 1
+  fi
+
+  # Check for existing project with same alias
+  if [ -f "$PROJECTS_DIR/${alias_input}.yaml" ]; then
+    echo -e "${YELLOW}Project @$alias_input already exists.${NC}"
+    read -p "Overwrite? [y/N]: " confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+      echo "Cancelled."
+      return
+    fi
+  fi
+
+  # Set CONFIG_FILE to the project-specific path
+  CONFIG_FILE="$PROJECTS_DIR/${alias_input}.yaml"
+  PROJECT_ALIAS="$alias_input"
+
   # Workspace base - derive from main repo
   local repo_name=$(basename "$main_repo")
   local repo_parent=$(dirname "$main_repo")
@@ -3746,9 +3939,47 @@ show_init() {
   # Expand ~
   workspace_base="${workspace_base/#\~/$HOME}"
 
+  # Check for project-level config in repo directory
+  local project_config="$main_repo/.crabcode.yaml"
+  if [ -f "$project_config" ]; then
+    echo ""
+    echo -e "${GREEN}Found project config: .crabcode.yaml${NC}"
+    read -p "Import settings from it? [Y/n]: " use_project
+    if [ "$use_project" != "n" ] && [ "$use_project" != "N" ]; then
+      mkdir -p "$PROJECTS_DIR"
+      cp "$project_config" "$CONFIG_FILE"
+
+      # Update paths to absolute if they use relative paths
+      local main_repo_val=$(yq -r '.main_repo // ""' "$CONFIG_FILE" 2>/dev/null)
+      if [ -z "$main_repo_val" ] || [ "$main_repo_val" = "null" ] || [[ "$main_repo_val" == "~/"* ]] || [[ "$main_repo_val" == "./"* ]]; then
+        yq -i ".main_repo = \"$main_repo\"" "$CONFIG_FILE"
+      fi
+
+      local ws_base_val=$(yq -r '.workspace_base // ""' "$CONFIG_FILE" 2>/dev/null)
+      if [ -z "$ws_base_val" ] || [ "$ws_base_val" = "null" ]; then
+        yq -i ".workspace_base = \"$workspace_base\"" "$CONFIG_FILE"
+      fi
+
+      # Set session_name to alias
+      yq -i ".session_name = \"$alias_input\"" "$CONFIG_FILE"
+
+      # Set as default if first project
+      _init_set_default_if_first "$alias_input"
+
+      echo ""
+      success "Project @$alias_input registered at $CONFIG_FILE"
+      echo ""
+      echo -e "${CYAN}Next steps:${NC}"
+      echo "  1. Review config: crab @$alias_input config"
+      echo "  2. Run 'crab @$alias_input config scan' to detect ports"
+      echo "  3. Run 'crab @$alias_input ws 1' to create your first workspace"
+      return
+    fi
+    echo ""
+  fi
+
   # Template handling: explicit flag or auto-detection
   if [ -n "$template_name" ]; then
-    # Validate the explicit template name
     case "$template_name" in
       "promptfoo-cloud"|"pf")
         template_name="promptfoo-cloud"
@@ -3761,13 +3992,14 @@ show_init() {
     esac
     echo ""
     echo -e "Applying ${GREEN}$template_name${NC} template..."
-    apply_template "$template_name" "$main_repo" "$workspace_base"
+    apply_template "$template_name" "$main_repo" "$workspace_base" "$alias_input"
+    _init_set_default_if_first "$alias_input"
     echo ""
-    success "Config created at $CONFIG_FILE (template: $template_name)"
+    success "Project @$alias_input registered at $CONFIG_FILE (template: $template_name)"
     echo ""
     echo -e "${CYAN}Next steps:${NC}"
-    echo "  1. Review config: crab config"
-    echo "  2. Run 'crab ws 1' to create your first workspace"
+    echo "  1. Review config: crab @$alias_input config"
+    echo "  2. Run 'crab @$alias_input ws 1' to create your first workspace"
     return
   fi
 
@@ -3781,27 +4013,29 @@ show_init() {
     if [ "$use_tpl" != "n" ] && [ "$use_tpl" != "N" ]; then
       echo ""
       echo -e "Applying ${GREEN}$detected${NC} template..."
-      apply_template "$detected" "$main_repo" "$workspace_base"
+      apply_template "$detected" "$main_repo" "$workspace_base" "$alias_input"
+      _init_set_default_if_first "$alias_input"
       echo ""
-      success "Config created at $CONFIG_FILE (template: $detected)"
+      success "Project @$alias_input registered at $CONFIG_FILE (template: $detected)"
       echo ""
       echo -e "${CYAN}Next steps:${NC}"
-      echo "  1. Review config: crab config"
-      echo "  2. Run 'crab ws 1' to create your first workspace"
+      echo "  1. Review config: crab @$alias_input config"
+      echo "  2. Run 'crab @$alias_input ws 1' to create your first workspace"
       return
     fi
     echo ""
   fi
 
   # No template - generate minimal config
-  mkdir -p "$CONFIG_DIR"
+  mkdir -p "$PROJECTS_DIR"
 
   cat > "$CONFIG_FILE" << EOF
 # Crabcode Configuration
 # Generated by 'crabcode init'
+# Project: @$alias_input
 # Run 'crab config scan' to auto-detect env files and ports
 
-session_name: crab
+session_name: $alias_input
 workspace_base: $workspace_base
 main_repo: $main_repo
 
@@ -3845,17 +4079,43 @@ layout:
 #     reset_to: origin/main
 EOF
 
+  _init_set_default_if_first "$alias_input"
+
   echo ""
-  success "Config created at $CONFIG_FILE"
+  success "Project @$alias_input registered at $CONFIG_FILE"
   echo ""
   echo -e "${CYAN}Next steps:${NC}"
   echo ""
-  echo "  1. Run 'crab config scan' to detect .env files and ports"
+  echo "  1. Run 'crab @$alias_input config scan' to detect .env files and ports"
   echo "  2. Edit $CONFIG_FILE to set your layout commands:"
   echo "     - server pane: your dev server command (e.g., pnpm dev)"
   echo "     - main pane: your main tool (e.g., claude)"
-  echo "  3. Run 'crab ws 1' to create your first workspace"
+  echo "  3. Run 'crab @$alias_input ws 1' to create your first workspace"
   echo ""
+}
+
+# Helper: set as default project if it's the first one registered
+_init_set_default_if_first() {
+  local alias="$1"
+  local count=0
+  for f in "$PROJECTS_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    count=$((count + 1))
+  done
+
+  if [ "$count" -le 1 ]; then
+    mkdir -p "$CONFIG_DIR"
+    # Use yq to set default_project if global config exists, else create it
+    if [ -f "$GLOBAL_CONFIG" ] && yq -r '.default_project' "$GLOBAL_CONFIG" &>/dev/null; then
+      yq -i ".default_project = \"$alias\"" "$GLOBAL_CONFIG"
+    else
+      cat > "$GLOBAL_CONFIG" << EOF
+# Crabcode Global Configuration
+default_project: $alias
+EOF
+    fi
+    echo -e "  ${GREEN}Set as default project${NC} (use 'crab default' to change)"
+  fi
 }
 
 # =============================================================================
@@ -3938,7 +4198,7 @@ config_scan() {
   done
 
   echo ""
-  echo -e "${CYAN}Add to ~/.crabcode/config.yaml:${NC}"
+  echo -e "${CYAN}Add to $CONFIG_FILE:${NC}"
   echo ""
   echo "env_sync:"
   echo "  files:"
@@ -4011,6 +4271,9 @@ show_config() {
   fi
 
   echo -e "${CYAN}Crabcode Configuration${NC}"
+  if [ -n "${PROJECT_ALIAS:-}" ]; then
+    echo "Project: @$PROJECT_ALIAS"
+  fi
   echo "File: $CONFIG_FILE"
   echo ""
   cat "$CONFIG_FILE"
@@ -4021,6 +4284,10 @@ show_doctor() {
   echo -e "${CYAN}   ( •_•)  Crabcode Doctor${NC}"
   echo -e "${CYAN}  /)🦀(\\${NC}"
   echo ""
+
+  if [ -n "${PROJECT_ALIAS:-}" ]; then
+    echo -e "  project: ${GREEN}@$PROJECT_ALIAS${NC}"
+  fi
 
   local issues=0
 
@@ -4521,7 +4788,11 @@ show_status() {
 
   echo ""
   echo -e "${CYAN}╭────────────────────────────────────────────────────╮${NC}"
-  echo -e "${CYAN}│${NC}              ${BOLD}🦀 CRAB STATUS${NC}                       ${CYAN}│${NC}"
+  if [ -n "${PROJECT_ALIAS:-}" ]; then
+    echo -e "${CYAN}│${NC}         ${BOLD}🦀 CRAB STATUS (@$PROJECT_ALIAS)${NC}$(printf '%*s' $((18 - ${#PROJECT_ALIAS})) '')${CYAN}│${NC}"
+  else
+    echo -e "${CYAN}│${NC}              ${BOLD}🦀 CRAB STATUS${NC}                       ${CYAN}│${NC}"
+  fi
   echo -e "${CYAN}╰────────────────────────────────────────────────────╯${NC}"
   echo ""
 
@@ -5874,6 +6145,16 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  MULTI-PROJECT (crab @alias ...)                                             ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab @pf ws 1          Open workspace 1 for project "pf"                    ║
+║  crab ws 1              Uses default project                                  ║
+║  crab projects          List all registered projects                          ║
+║  crab default pf        Set default project                                   ║
+║  crab init              Register a new project (asks for alias)               ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  OTHER COMMANDS                                                               ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab init             Minimal setup (2 questions)                            ║
@@ -5980,6 +6261,12 @@ show_help() {
   echo "  tk share --to ssh:user@host   SSH transfer"
   echo "  tk share --to slack:#channel  Slack upload"
   echo "  tk share --serve  Local HTTP server"
+  echo ""
+  echo "Multi-Project Commands:"
+  echo "  @alias <cmd>      Run command against a specific project"
+  echo "  projects          List registered projects"
+  echo "  default [alias]   Show/set default project"
+  echo "  init              Register a new project (asks for alias)"
   echo ""
   echo "Other Commands:"
   echo "  init              Setup config (auto-detects project type)"
@@ -6216,10 +6503,168 @@ pf_help() {
 }
 
 # =============================================================================
+# Multi-Project Commands
+# =============================================================================
+
+# List all registered projects
+show_projects() {
+  local subcmd="${1:-}"
+
+  if [ "$subcmd" = "rm" ] || [ "$subcmd" = "remove" ] || [ "$subcmd" = "delete" ]; then
+    remove_project "${2:-}"
+    return
+  fi
+
+  echo -e "${CYAN}Registered Projects${NC}"
+  echo ""
+
+  if [ ! -d "$PROJECTS_DIR" ] || [ -z "$(ls -A "$PROJECTS_DIR" 2>/dev/null)" ]; then
+    echo "  No projects registered."
+    echo ""
+    echo "  Run 'crab init' to register your first project."
+    return
+  fi
+
+  # Get default project
+  local default_alias=""
+  if [ -f "$GLOBAL_CONFIG" ]; then
+    default_alias=$(yq -r '.default_project // ""' "$GLOBAL_CONFIG" 2>/dev/null)
+    [ "$default_alias" = "null" ] && default_alias=""
+  fi
+
+  for f in "$PROJECTS_DIR"/*.yaml; do
+    [ -f "$f" ] || continue
+    local alias=$(basename "$f" .yaml)
+    local repo=$(yq -r '.main_repo // ""' "$f" 2>/dev/null)
+    local session=$(yq -r '.session_name // ""' "$f" 2>/dev/null)
+
+    # Check if tmux session is running
+    local status_icon="  "
+    if tmux has-session -t "$session" 2>/dev/null; then
+      status_icon="${GREEN}●${NC} "
+    fi
+
+    # Check if default
+    local default_marker=""
+    if [ "$alias" = "$default_alias" ]; then
+      default_marker=" ${YELLOW}(default)${NC}"
+    fi
+
+    echo -e "  ${status_icon}${BOLD}@$alias${NC}${default_marker}"
+    echo -e "    ${GRAY}$repo${NC}"
+  done
+  echo ""
+}
+
+# Remove a project registration
+remove_project() {
+  local alias="${1:-}"
+
+  if [ -z "$alias" ]; then
+    error "Usage: crab projects rm <alias>"
+    return 1
+  fi
+
+  # Strip @ prefix if provided
+  alias="${alias#@}"
+
+  local project_file="$PROJECTS_DIR/${alias}.yaml"
+  if [ ! -f "$project_file" ]; then
+    error "No project registered with alias: @$alias"
+    return 1
+  fi
+
+  echo -e "Remove project registration for ${BOLD}@$alias${NC}?"
+  echo -e "  ${GRAY}(This only removes the config, not your workspaces or repo)${NC}"
+  read -p "  [y/N]: " confirm
+  if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+    echo "Cancelled."
+    return
+  fi
+
+  rm "$project_file"
+
+  # Clear default if it was the default
+  if [ -f "$GLOBAL_CONFIG" ]; then
+    local current_default=$(yq -r '.default_project // ""' "$GLOBAL_CONFIG" 2>/dev/null)
+    if [ "$current_default" = "$alias" ]; then
+      yq -i '.default_project = ""' "$GLOBAL_CONFIG"
+      echo -e "  ${YELLOW}Cleared default project (was @$alias)${NC}"
+    fi
+  fi
+
+  success "Removed project @$alias"
+}
+
+# Set or show the default project
+set_default_project() {
+  local alias="${1:-}"
+
+  if [ -z "$alias" ]; then
+    # Show current default
+    local current=""
+    if [ -f "$GLOBAL_CONFIG" ]; then
+      current=$(yq -r '.default_project // ""' "$GLOBAL_CONFIG" 2>/dev/null)
+      [ "$current" = "null" ] && current=""
+    fi
+    if [ -n "$current" ]; then
+      echo -e "Default project: ${BOLD}@$current${NC}"
+    else
+      echo "No default project set."
+      echo "Usage: crab default <alias>"
+    fi
+    return
+  fi
+
+  # Strip @ prefix if provided
+  alias="${alias#@}"
+
+  local project_file="$PROJECTS_DIR/${alias}.yaml"
+  if [ ! -f "$project_file" ]; then
+    error "No project registered with alias: @$alias"
+    echo "Run 'crab projects' to see registered projects."
+    return 1
+  fi
+
+  mkdir -p "$CONFIG_DIR"
+  if [ -f "$GLOBAL_CONFIG" ]; then
+    yq -i ".default_project = \"$alias\"" "$GLOBAL_CONFIG"
+  else
+    cat > "$GLOBAL_CONFIG" << EOF
+# Crabcode Global Configuration
+default_project: $alias
+EOF
+  fi
+
+  success "Default project set to @$alias"
+}
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
 main() {
+  # @alias stripping: crab @pf ws 1 → resolve project, then route "ws 1"
+  PROJECT_ALIAS=""
+  if [[ "${1:-}" == @* ]]; then
+    resolve_project "$1"
+    shift
+  fi
+
+  # For project-aware commands, resolve project (cwd-first, then default)
+  case "${1:-}" in
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo")
+      if [ -z "$PROJECT_ALIAS" ]; then
+        # Legacy migration check
+        if is_legacy_config; then
+          check_legacy_migration
+        fi
+        # Try cwd-based detection first (handles: crab restart from a workspace dir)
+        resolve_project_from_cwd 2>/dev/null || resolve_project ""
+      fi
+      ;;
+  esac
+
   case "${1:-}" in
     "")
       list_workspaces
@@ -6264,6 +6709,12 @@ main() {
     "pf"|"promptfoo")
       # Promptfoo target discovery agent
       handle_pf_command "${@:2}"
+      ;;
+    "projects"|"project"|"proj")
+      show_projects "${@:2}"
+      ;;
+    "default")
+      set_default_project "${2:-}"
       ;;
     "new"|"create")
       # Shorthand: crab new -> crab ws new
@@ -6515,6 +6966,12 @@ main() {
     *)
       # Backwards compatibility: crab <N> -> crab ws <N>
       if [[ "$1" =~ ^[0-9]+$ ]]; then
+        if [ -z "$PROJECT_ALIAS" ]; then
+          if is_legacy_config; then
+            check_legacy_migration
+          fi
+          resolve_project_from_cwd 2>/dev/null || resolve_project ""
+        fi
         load_config
         validate_config
         handle_ws_command "$@"
@@ -6522,9 +6979,10 @@ main() {
         error "Unknown command: $1"
         echo ""
         echo "Usage: crab ws <N>       Open workspace N"
+        echo "       crab @alias ws <N> Open workspace for specific project"
         echo "       crab ws new       Create new workspace"
         echo "       crab restart      Restart current workspace"
-        echo "       crab wip save     Save work in progress"
+        echo "       crab projects     List registered projects"
         echo "       crab cheat        Show all commands"
         exit 1
       fi
