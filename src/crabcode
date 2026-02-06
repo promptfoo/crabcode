@@ -27,13 +27,17 @@
 
 set -e
 
-VERSION="0.5.0"
+VERSION="0.6.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
 PROJECTS_DIR="$CONFIG_DIR/projects"
 GLOBAL_CONFIG="$CONFIG_DIR/config.yaml"
 PROJECT_ALIAS=""
+TEAM_PROMPT=""
+
+# Default team prompt (used when --team is passed without a custom prompt)
+DEFAULT_TEAM_PROMPT="Create an agent team to help with this task. You are the team lead working in a crabcode workspace. Spawn teammates as needed for parallel work - research, implementation, review, or debugging. Coordinate the team, assign tasks, and synthesize results. The shared codebase is in this directory."
 
 # Colors
 RED='\033[0;31m'
@@ -1296,6 +1300,14 @@ open_workspace() {
   # Build commands from config
   local dev_cmd=$(get_pane_command "server")
   local claude_cmd=$(get_pane_command "main")
+
+  # If team mode, append the team prompt to claude command
+  if [ -n "${TEAM_PROMPT:-}" ]; then
+    # Escape single quotes in team prompt for shell
+    local escaped_prompt="${TEAM_PROMPT//\'/\'\\\'\'}"
+    claude_cmd="$claude_cmd -p '$escaped_prompt'"
+    echo -e "${MAGENTA}Team mode enabled${NC}"
+  fi
 
   # Port override if needed
   if [ "$need_override" = "true" ]; then
@@ -6107,6 +6119,8 @@ show_cheat() {
 ║  crab ws new           Create next available workspace                        ║
 ║  crab ws <N>           Open/create workspace N                                ║
 ║  crab ws <N> --separate   Open in new terminal window                         ║
+║  crab ws <N> --team       Start with agent team (Claude spawns teammates)     ║
+║  crab ws <N> -t "prompt"  Start team with custom prompt                       ║
 ║  crab ws <N> restart   Reset git + restart panes                              ║
 ║  crab ws <N> cleanup   Kill window + reset to origin/main                     ║
 ║  crab ws <N> destroy   Completely remove workspace (worktree + files)         ║
@@ -6247,6 +6261,7 @@ show_help() {
   echo "  ws <N> cleanup    Kill window + reset to origin/main"
   echo "  ws <N> continue   Resume with --continue flag"
   echo "  ws <N> --separate Open in new terminal window"
+  echo "  ws <N> --team     Start with agent team"
   echo ""
   echo "Shortcuts (auto-detect workspace):"
   echo "  <N>               Shorthand for: ws <N>"
@@ -6309,6 +6324,29 @@ handle_ws_command() {
     *)
       if [[ "$arg" =~ ^[0-9]+$ ]]; then
         local num="$arg"
+        local team_prompt=""
+
+        # Parse remaining args for --team flag
+        local remaining_args=()
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --team|-t)
+              if [ -n "${2:-}" ] && [[ "${2:-}" != -* ]]; then
+                team_prompt="$2"
+                shift 2
+              else
+                team_prompt="$DEFAULT_TEAM_PROMPT"
+                shift
+              fi
+              ;;
+            *)
+              remaining_args+=("$1")
+              shift
+              ;;
+          esac
+        done
+        set -- "${remaining_args[@]}"
+
         case "${1:-}" in
           "cleanup"|"clean")
             cleanup_workspace "$num"
@@ -6329,11 +6367,16 @@ handle_ws_command() {
             handle_wip_for_workspace "$num" "${@:2}"
             ;;
           "")
-            open_workspace "$num"
+            if [ -n "$team_prompt" ]; then
+              TEAM_PROMPT="$team_prompt"
+              open_workspace "$num"
+            else
+              open_workspace "$num"
+            fi
             ;;
           *)
             error "Unknown command: crab ws $num $1"
-            echo "Try: crab ws $num restart|cleanup|continue|wip"
+            echo "Try: crab ws $num restart|cleanup|continue|wip|--team"
             exit 1
             ;;
         esac

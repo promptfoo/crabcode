@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.0] - 2026-02-05
+
+### Added
+- **Agent Teams integration**: start Claude Code with collaborative agent teams
+  - `crab ws <N> --team` — start workspace with agent team mode
+  - `crab ws <N> --team "custom prompt"` — start with custom team prompt
+  - Default team prompt for generic multi-agent collaboration
+- Environment setup for agent teams feature (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`)
+- Tmux teammate mode for split-pane agent display
+
 ## [0.5.0] - 2026-02-04
 
 ### Added
