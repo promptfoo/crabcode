@@ -1301,12 +1301,26 @@ open_workspace() {
   local dev_cmd=$(get_pane_command "server")
   local claude_cmd=$(get_pane_command "main")
 
-  # If team mode, append the team prompt to claude command
+  # If team mode, write team context to CLAUDE.md for interactive session
   if [ -n "${TEAM_PROMPT:-}" ]; then
-    # Escape single quotes in team prompt for shell
-    local escaped_prompt="${TEAM_PROMPT//\'/\'\\\'\'}"
-    claude_cmd="$claude_cmd -p '$escaped_prompt'"
-    echo -e "${MAGENTA}Team mode enabled${NC}"
+    local team_file="$dir/.claude/CLAUDE.md"
+    mkdir -p "$dir/.claude"
+
+    # Write team instructions to CLAUDE.md (overwrites any existing team section)
+    if [ -f "$team_file" ]; then
+      # Remove existing team section if present, then append
+      sed -i '' '/^## Team Mode$/,/^## /{ /^## Team Mode$/d; /^## /!d; }' "$team_file" 2>/dev/null || true
+    fi
+
+    cat >> "$team_file" << EOF
+
+## Team Mode
+
+$TEAM_PROMPT
+
+When the user provides a task, spawn teammates as needed using the Task tool.
+EOF
+    echo -e "${MAGENTA}Team mode enabled - instructions written to .claude/CLAUDE.md${NC}"
   fi
 
   # Port override if needed
