@@ -1344,7 +1344,17 @@ EOF
   else
     # Session exists
     if tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
-      echo -e "${CYAN}Switching to workspace $num...${NC}"
+      # If team mode and window exists, restart the main pane so Claude sees new context
+      if [ -n "${TEAM_PROMPT:-}" ]; then
+        echo -e "${CYAN}Team mode: restarting Claude in workspace $num...${NC}"
+        # Find the main pane (usually pane 2) and restart Claude
+        local main_pane="${SESSION_NAME}:${window_name}.2"
+        tmux send-keys -t "$main_pane" C-c 2>/dev/null || true
+        sleep 0.5
+        tmux send-keys -t "$main_pane" "$claude_cmd" Enter 2>/dev/null || true
+      else
+        echo -e "${CYAN}Switching to workspace $num...${NC}"
+      fi
       if [ -n "$TMUX" ]; then
         tmux select-window -t "$SESSION_NAME:$window_name"
       else
