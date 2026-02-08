@@ -34,10 +34,6 @@ WIP_BASE="$CONFIG_DIR/wip"
 PROJECTS_DIR="$CONFIG_DIR/projects"
 GLOBAL_CONFIG="$CONFIG_DIR/config.yaml"
 PROJECT_ALIAS=""
-TEAM_PROMPT=""
-
-# Default team prompt (used when --team is passed without a custom prompt)
-DEFAULT_TEAM_PROMPT="Create an agent team to help with this task. You are the team lead working in a crabcode workspace. Spawn teammates as needed for parallel work - research, implementation, review, or debugging. Coordinate the team, assign tasks, and synthesize results. The shared codebase is in this directory."
 
 # Colors
 RED='\033[0;31m'
@@ -1301,38 +1297,18 @@ open_workspace() {
   local dev_cmd=$(get_pane_command "server")
   local claude_cmd=$(get_pane_command "main")
 
-  # Handle team mode: add or remove team section from CLAUDE.md
+  # Always ensure team context exists in CLAUDE.md
   local team_file="$dir/.claude/CLAUDE.md"
-  if [ -n "${TEAM_PROMPT:-}" ]; then
-    # Team mode ON: add team section
-    mkdir -p "$dir/.claude"
+  mkdir -p "$dir/.claude"
 
-    # Remove existing team section if present, then append new one
-    if [ -f "$team_file" ]; then
-      # Remove team section (from ## Team Mode to next ## or end of file)
-      sed -i '' '/^## Team Mode$/,/^## [^T]/{ /^## Team Mode$/d; /^## [^T]/!d; }' "$team_file" 2>/dev/null || true
-      # Also handle if Team Mode is last section (no following ##)
-      sed -i '' '/^## Team Mode$/,$d' "$team_file" 2>/dev/null || true
-    fi
-
-    cat >> "$team_file" << EOF
+  # Add team section if not present
+  if ! grep -q "^## Team Mode$" "$team_file" 2>/dev/null; then
+    cat >> "$team_file" << 'EOF'
 
 ## Team Mode
 
-$TEAM_PROMPT
-
-When the user provides a task, spawn teammates as needed using the Task tool.
+You can spawn agent teammates for complex tasks. Use the Task tool to create specialized agents (researcher, implementer, reviewer, debugger) that work in parallel. Coordinate the team, assign tasks, and synthesize results. Only spawn teams when the task benefits from parallel work.
 EOF
-    echo -e "${MAGENTA}Team mode enabled${NC}"
-  else
-    # Team mode OFF: remove team section if it exists
-    if [ -f "$team_file" ]; then
-      # Remove team section
-      sed -i '' '/^## Team Mode$/,/^## [^T]/{ /^## Team Mode$/d; /^## [^T]/!d; }' "$team_file" 2>/dev/null || true
-      sed -i '' '/^## Team Mode$/,$d' "$team_file" 2>/dev/null || true
-      # Clean up trailing whitespace
-      sed -i '' -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$team_file" 2>/dev/null || true
-    fi
   fi
 
   # Port override if needed
@@ -1356,17 +1332,7 @@ EOF
   else
     # Session exists
     if tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
-      # If team mode and window exists, restart the main pane so Claude sees new context
-      if [ -n "${TEAM_PROMPT:-}" ]; then
-        echo -e "${CYAN}Team mode: restarting Claude in workspace $num...${NC}"
-        # Find the main pane (usually pane 2) and restart Claude
-        local main_pane="${SESSION_NAME}:${window_name}.2"
-        tmux send-keys -t "$main_pane" C-c 2>/dev/null || true
-        sleep 0.5
-        tmux send-keys -t "$main_pane" "$claude_cmd" Enter 2>/dev/null || true
-      else
-        echo -e "${CYAN}Switching to workspace $num...${NC}"
-      fi
+      echo -e "${CYAN}Switching to workspace $num...${NC}"
       if [ -n "$TMUX" ]; then
         tmux select-window -t "$SESSION_NAME:$window_name"
       else
@@ -1702,25 +1668,13 @@ restart_workspace() {
 
   success "Git reset complete (on branch: $branch_name)"
 
-  # If we're in tmux, restart the panes
-  # Use current window if we're in the workspace dir, otherwise look for ws$num
+  # Rebuild the tmux window with full layout
   if [ -n "$TMUX" ]; then
-    local current_window=$(tmux display-message -p '#{window_name}' 2>/dev/null)
-    local current_dir=$(pwd)
-    local use_current_window=false
-
-    # If we're in the workspace directory, use current window (even if renamed)
-    if [[ "$current_dir" == "$dir"* ]]; then
-      use_current_window=true
-      window_name="$current_window"
-    fi
-
-    # Check if we can use current window or if ws$num exists
-    if [ "$use_current_window" = true ] || tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
     local port_info=$(get_workspace_ports "$num" "$dir")
     local api_port=$(echo "$port_info" | cut -d: -f1)
     local app_port=$(echo "$port_info" | cut -d: -f2)
     local need_override=$(echo "$port_info" | cut -d: -f3)
+    local env_api_port=$(echo "$port_info" | cut -d: -f4)
 
     local dev_cmd=$(get_pane_command "server")
     local claude_cmd=$(get_pane_command "main")
@@ -1729,32 +1683,30 @@ restart_workspace() {
       dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
     fi
 
-    # Get pane indices
-    local pane_indices=$(get_pane_indices)
-    local p_terminal=$(echo "$pane_indices" | cut -d: -f1)
-    local p_main=$(echo "$pane_indices" | cut -d: -f2)
-    local p_server=$(echo "$pane_indices" | cut -d: -f3)
+    local port_msg="Using port $env_api_port"
+    [ "$need_override" = "true" ] && port_msg="Port $env_api_port in use → using $api_port"
 
-    echo "  Clearing terminal pane..."
-    tmux send-keys -t "$SESSION_NAME:$window_name.$p_terminal" "clear" C-m
+    # Kill existing window if it exists (to recreate full layout)
+    local current_window=$(tmux display-message -p '#{window_name}' 2>/dev/null)
+    if tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
+      echo "  Killing existing window to recreate layout..."
+      tmux kill-window -t "$SESSION_NAME:$window_name" 2>/dev/null || true
+    elif [[ "$(pwd)" == "$dir"* ]] && [ -n "$current_window" ]; then
+      # We're in the workspace dir but window has different name - kill current
+      echo "  Killing current window to recreate layout..."
+      tmux kill-window -t "$SESSION_NAME:$current_window" 2>/dev/null || true
+    fi
 
-    echo "  Restarting server pane..."
-    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_server" -c "$dir"
-    sleep 0.5
-    [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "clear && $dev_cmd" C-m
+    sleep 0.3
 
-    echo "  Restarting main pane..."
-    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
-    sleep 0.5
-    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "clear && $claude_cmd" C-m
+    echo "  Recreating workspace layout..."
+    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
 
     # Record mood event
     mood_record_event "restart" "workspace $num"
 
-    success "Workspace $num restarted!"
-    else
-      echo -e "${YELLOW}  Window 'ws$num' not found and not in workspace dir${NC}"
-    fi
+    success "Workspace $num restarted with fresh layout!"
+    tmux select-window -t "$SESSION_NAME:$window_name"
   else
     echo -e "${YELLOW}  Not in tmux session - run 'crabcode $num' to start${NC}"
   fi
@@ -6155,9 +6107,7 @@ show_cheat() {
 ║  crab ws new           Create next available workspace                        ║
 ║  crab ws <N>           Open/create workspace N                                ║
 ║  crab ws <N> --separate   Open in new terminal window                         ║
-║  crab ws <N> --team       Start with agent team (Claude spawns teammates)     ║
-║  crab ws <N> -t "prompt"  Start team with custom prompt                       ║
-║  crab ws <N> restart   Reset git + restart panes                              ║
+║  crab ws <N> restart   Reset git + restart panes (recreates full layout)      ║
 ║  crab ws <N> cleanup   Kill window + reset to origin/main                     ║
 ║  crab ws <N> destroy   Completely remove workspace (worktree + files)         ║
 ║  crab destroy <N>      Shorthand for above                                    ║
@@ -6293,11 +6243,10 @@ show_help() {
   echo "  ws                List all workspaces"
   echo "  ws new            Create next available workspace"
   echo "  ws <N>            Open/create workspace N"
-  echo "  ws <N> restart    Reset git + restart panes"
+  echo "  ws <N> restart    Reset git + restart panes (recreates layout)"
   echo "  ws <N> cleanup    Kill window + reset to origin/main"
   echo "  ws <N> continue   Resume with --continue flag"
   echo "  ws <N> --separate Open in new terminal window"
-  echo "  ws <N> --team     Start with agent team"
   echo ""
   echo "Shortcuts (auto-detect workspace):"
   echo "  <N>               Shorthand for: ws <N>"
@@ -6360,28 +6309,6 @@ handle_ws_command() {
     *)
       if [[ "$arg" =~ ^[0-9]+$ ]]; then
         local num="$arg"
-        local team_prompt=""
-
-        # Parse remaining args for --team flag
-        local remaining_args=()
-        while [ $# -gt 0 ]; do
-          case "$1" in
-            --team|-t)
-              if [ -n "${2:-}" ] && [[ "${2:-}" != -* ]]; then
-                team_prompt="$2"
-                shift 2
-              else
-                team_prompt="$DEFAULT_TEAM_PROMPT"
-                shift
-              fi
-              ;;
-            *)
-              remaining_args+=("$1")
-              shift
-              ;;
-          esac
-        done
-        set -- "${remaining_args[@]}"
 
         case "${1:-}" in
           "cleanup"|"clean")
@@ -6403,16 +6330,11 @@ handle_ws_command() {
             handle_wip_for_workspace "$num" "${@:2}"
             ;;
           "")
-            if [ -n "$team_prompt" ]; then
-              TEAM_PROMPT="$team_prompt"
-              open_workspace "$num"
-            else
-              open_workspace "$num"
-            fi
+            open_workspace "$num"
             ;;
           *)
             error "Unknown command: crab ws $num $1"
-            echo "Try: crab ws $num restart|cleanup|continue|wip|--team"
+            echo "Try: crab ws $num restart|cleanup|continue|wip"
             exit 1
             ;;
         esac
