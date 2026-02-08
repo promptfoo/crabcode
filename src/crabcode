@@ -1686,27 +1686,38 @@ restart_workspace() {
     local port_msg="Using port $env_api_port"
     [ "$need_override" = "true" ] && port_msg="Port $env_api_port in use → using $api_port"
 
-    # Kill existing window if it exists (to recreate full layout)
     local current_window=$(tmux display-message -p '#{window_name}' 2>/dev/null)
+    local old_window=""
+
+    # Determine which window to replace
     if tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
-      echo "  Killing existing window to recreate layout..."
-      tmux kill-window -t "$SESSION_NAME:$window_name" 2>/dev/null || true
+      old_window="$window_name"
     elif [[ "$(pwd)" == "$dir"* ]] && [ -n "$current_window" ]; then
-      # We're in the workspace dir but window has different name - kill current
-      echo "  Killing current window to recreate layout..."
-      tmux kill-window -t "$SESSION_NAME:$current_window" 2>/dev/null || true
+      old_window="$current_window"
     fi
 
-    sleep 0.3
+    if [ -n "$old_window" ]; then
+      echo "  Recreating workspace layout..."
+      # Create new window with temp name first
+      local temp_name="_restart_temp_$$"
+      create_workspace_layout "$temp_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
 
-    echo "  Recreating workspace layout..."
-    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
+      # Kill old window
+      tmux kill-window -t "$SESSION_NAME:$old_window" 2>/dev/null || true
 
-    # Record mood event
-    mood_record_event "restart" "workspace $num"
+      # Rename temp to proper name
+      tmux rename-window -t "$SESSION_NAME:$temp_name" "$window_name" 2>/dev/null || true
 
-    success "Workspace $num restarted with fresh layout!"
-    tmux select-window -t "$SESSION_NAME:$window_name"
+      # Record mood event
+      mood_record_event "restart" "workspace $num"
+
+      success "Workspace $num restarted with fresh layout!"
+      tmux select-window -t "$SESSION_NAME:$window_name"
+    else
+      echo -e "${YELLOW}  No existing window found - creating new...${NC}"
+      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
+      tmux select-window -t "$SESSION_NAME:$window_name"
+    fi
   else
     echo -e "${YELLOW}  Not in tmux session - run 'crabcode $num' to start${NC}"
   fi
