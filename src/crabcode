@@ -6860,12 +6860,12 @@ session_start() {
   # Update last accessed
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-  # Run Claude interactively
+  # Run Claude interactively with context
   cd "$(pwd)"
   if [ -f "$context_file" ]; then
-    claude --print "$context_file"
+    claude --dangerously-skip-permissions --chrome "$context_file"
   else
-    claude
+    claude --dangerously-skip-permissions --chrome
   fi
 
   # After Claude exits, prompt for summary if empty
@@ -6901,7 +6901,7 @@ session_resume() {
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
   # Resume Claude with --continue
-  claude --continue
+  claude --dangerously-skip-permissions --chrome --continue
 }
 
 # Delete a session
@@ -7180,7 +7180,7 @@ EOF
   if [[ ! "$start_now" =~ ^[Nn]$ ]]; then
     session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     cd "$(pwd)"
-    claude "$session_dir/context.md"
+    claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
   fi
 }
 
@@ -7241,7 +7241,7 @@ EOF
   # Start Claude
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   cd "$(pwd)"
-  claude "$session_dir/context.md"
+  claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
 }
 
 # Handle review commands
