@@ -6782,7 +6782,10 @@ session_list() {
   local project_label=""
   [ -n "$PROJECT_ALIAS" ] && project_label="@$PROJECT_ALIAS "
 
-  echo -e "${BOLD}${project_label}Sessions:${NC}"
+  # Header based on filter
+  local header="Sessions"
+  [[ "$filter" == "review" ]] && header="Reviews"
+  echo -e "${BOLD}${project_label}${header}:${NC}"
   echo ""
 
   for session_dir in "$sessions_dir"/*/; do
@@ -6822,14 +6825,20 @@ session_list() {
       fi
     fi
 
-    # Truncate summary if too long
-    [ ${#summary} -gt 50 ] && summary="${summary:0:47}..."
+    # Format summary
+    local summary_display=""
+    if [ -n "$summary" ] && [ "$summary" != "null" ]; then
+      [ ${#summary} -gt 50 ] && summary="${summary:0:47}..."
+      summary_display="\"$summary\""
+    else
+      summary_display="${GRAY}(no summary)${NC}"
+    fi
 
     # Color based on type
-    local type_color="$GRAY"
-    [[ "$type" == "review" ]] && type_color="$CYAN"
+    local type_color="$CYAN"
+    [[ "$type" == "general" ]] && type_color="$GRAY"
 
-    printf "  ${BOLD}%-20s${NC} ${type_color}%-50s${NC} ${GRAY}%s${NC}\n" "$name" "\"$summary\"" "$time_ago"
+    printf "  ${BOLD}%-20s${NC} ${type_color}%-50b${NC} ${GRAY}%s${NC}\n" "$name" "$summary_display" "$time_ago"
   done
 
   if [ "$found" = false ]; then
