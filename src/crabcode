@@ -1912,6 +1912,7 @@ get_wip_dir() {
 wip_save() {
   local num=$1
   local do_restart=$2
+  local custom_name="${3:-}"
   local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
   local wip_dir=$(get_wip_dir "$num")
   local timestamp=$(date +%Y%m%d-%H%M%S)
@@ -1929,6 +1930,9 @@ wip_save() {
   local staged=$(git diff --cached HEAD 2>/dev/null || echo "")
   local status=$(git status --porcelain 2>/dev/null || echo "")
   local branch=$(git branch --show-current 2>/dev/null || echo "unknown")
+
+  # Get untracked files
+  local untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null || echo "")
 
   git fetch origin main --quiet 2>/dev/null || true
   local commits_ahead=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo "0")
@@ -1956,7 +1960,7 @@ wip_save() {
 
   # Check if there's anything to save
   local has_changes="false"
-  if [ -n "$diff" ] || [ -n "$staged" ] || [ -n "$status" ] || [ -n "$submodule_diffs" ]; then
+  if [ -n "$diff" ] || [ -n "$staged" ] || [ -n "$status" ] || [ -n "$submodule_diffs" ] || [ -n "$untracked_files" ]; then
     has_changes="true"
   elif [ "$commits_ahead" -gt 0 ] 2>/dev/null; then
     has_changes="true"
@@ -1969,27 +1973,56 @@ wip_save() {
     return 0
   fi
 
-  local slug="wip-$(date +%H%M)"
-  local summary="Work in progress"
+  local slug=""
+  local summary=""
 
-  # Try to generate AI summary if claude is available
-  if command_exists claude; then
-    local all_diffs="$diff$staged$submodule_diffs"
-    local summary_json=$(generate_wip_summary "$all_diffs")
-    local parsed_slug=$(echo "$summary_json" | sed -n 's/.*"slug"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    local parsed_summary=$(echo "$summary_json" | sed -n 's/.*"summary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
-    [ -n "$parsed_slug" ] && slug="$parsed_slug"
-    [ -n "$parsed_summary" ] && summary="$parsed_summary"
+  # Use custom name if provided
+  if [ -n "$custom_name" ]; then
+    slug=$(echo "$custom_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+    summary="$custom_name"
+  else
+    # Try to generate AI summary if claude is available
+    slug="wip-$(date +%H%M)"
+    summary="Work in progress"
+    if command_exists claude; then
+      local all_diffs="$diff$staged$submodule_diffs"
+      local summary_json=$(generate_wip_summary "$all_diffs")
+      local parsed_slug=$(echo "$summary_json" | sed -n 's/.*"slug"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      local parsed_summary=$(echo "$summary_json" | sed -n 's/.*"summary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      [ -n "$parsed_slug" ] && slug="$parsed_slug"
+      [ -n "$parsed_summary" ] && summary="$parsed_summary"
+    fi
   fi
 
   local wip_path="$wip_dir/$timestamp-$slug"
   mkdir -p "$wip_path"
 
-  echo "  Saving patches..."
-  [ -n "$diff" ] && echo "$diff" > "$wip_path/main-unstaged.patch"
-  [ -n "$staged" ] && echo "$staged" > "$wip_path/main-staged.patch"
+  local saved_count=0
+
+  # Save patches
+  if [ -n "$diff" ]; then
+    echo "$diff" > "$wip_path/main-unstaged.patch"
+    ((saved_count++))
+  fi
+  if [ -n "$staged" ]; then
+    echo "$staged" > "$wip_path/main-staged.patch"
+    ((saved_count++))
+  fi
   [ -n "$status" ] && echo "$status" > "$wip_path/main-status.txt"
   [ -n "$commit_log" ] && echo "$commit_log" > "$wip_path/main-commits.txt"
+
+  # Save untracked files (copy actual content)
+  if [ -n "$untracked_files" ]; then
+    local untracked_dir="$wip_path/untracked"
+    mkdir -p "$untracked_dir"
+    echo "$untracked_files" | while read -r file; do
+      [ -z "$file" ] && continue
+      local file_dir=$(dirname "$file")
+      mkdir -p "$untracked_dir/$file_dir"
+      cp "$dir/$file" "$untracked_dir/$file" 2>/dev/null && ((saved_count++))
+    done
+    echo "$untracked_files" > "$wip_path/untracked-files.txt"
+  fi
 
   # Save submodule patches
   for ((i=0; i<submodules_count; i++)); do
@@ -2025,8 +2058,7 @@ EOF
   mood_record_event "wip_save" "$slug"
 
   success "WIP saved: $slug"
-  echo -e "   ${BLUE}$summary${NC}"
-  echo "   Location: $wip_path"
+  echo -e "   ${GRAY}$summary${NC}"
 
   if [ "$do_restart" = "true" ]; then
     echo ""
@@ -2600,16 +2632,26 @@ _restore_wip() {
     fi
   done
 
+  # Restore untracked files
+  if [ -d "$wip_path/untracked" ]; then
+    echo "  Restoring untracked files..."
+    cp -r "$wip_path/untracked/." "$dir/" 2>/dev/null || true
+  fi
+
   success "WIP restored: $wip_name"
 
-  if [ "$open_after" = "true" ]; then
+  # Check if user is already in the workspace
+  local current_dir=$(pwd)
+  if [[ "$current_dir" == "$dir"* ]]; then
+    # Already in workspace, no need to tell them to open it
+    :
+  elif [ "$open_after" = "true" ]; then
     echo ""
     echo "  Opening workspace $num..."
     open_workspace "$num"
   else
     echo ""
     echo "  Run 'crab $num' to open the workspace"
-    echo "  Or 'crab wip restore <N> --open' to restore and open"
   fi
 }
 
@@ -6400,11 +6442,22 @@ handle_wip_for_workspace() {
 
   case "${1:-}" in
     "save")
-      if [ "${2:-}" = "--restart" ] || [ "${2:-}" = "-r" ]; then
-        wip_save "$num" "true"
-      else
-        wip_save "$num" "false"
-      fi
+      shift  # Remove "save"
+      local do_restart="false"
+      local custom_name=""
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --restart|-r)
+            do_restart="true"
+            shift
+            ;;
+          *)
+            custom_name="$1"
+            shift
+            ;;
+        esac
+      done
+      wip_save "$num" "$do_restart" "$custom_name"
       ;;
     "ls"|"list")
       wip_list "$num"
@@ -6420,7 +6473,7 @@ handle_wip_for_workspace() {
       ;;
     *)
       echo -e "${CYAN}WIP Commands for workspace $num:${NC}"
-      echo "  crab ws $num wip save [--restart]"
+      echo "  crab ws $num wip save [\"name\"] [--restart]"
       echo "  crab ws $num wip ls"
       echo "  crab ws $num wip --continue"
       echo "  crab ws $num wip --resume"
@@ -7373,7 +7426,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -7481,6 +7534,32 @@ main() {
       fi
       cleanup_workspace "$num"
       ;;
+    "save")
+      # Shortcut: crab save ["name"] [--restart]
+      load_config
+      validate_config
+      num=$(detect_workspace)
+      if [ -z "$num" ]; then
+        error "Not in a workspace directory. Run from inside a workspace."
+        exit 1
+      fi
+      local do_restart="false"
+      local custom_name=""
+      shift  # Remove "save"
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --restart|-r)
+            do_restart="true"
+            shift
+            ;;
+          *)
+            custom_name="$1"
+            shift
+            ;;
+        esac
+      done
+      wip_save "$num" "$do_restart" "$custom_name"
+      ;;
     "destroy"|"rm"|"remove")
       load_config
       validate_config
@@ -7507,11 +7586,24 @@ main() {
             error "Not in a workspace directory. Use: crab ws <N> wip save"
             exit 1
           fi
-          if [ "${3:-}" = "--restart" ] || [ "${3:-}" = "-r" ]; then
-            wip_save "$num" "true"
-          else
-            wip_save "$num" "false"
-          fi
+          # Parse: crab wip save ["name"] [--restart]
+          local do_restart="false"
+          local custom_name=""
+          shift 2  # Remove "wip" and "save"
+          while [ $# -gt 0 ]; do
+            case "$1" in
+              --restart|-r)
+                do_restart="true"
+                shift
+                ;;
+              *)
+                # Anything else is the custom name
+                custom_name="$1"
+                shift
+                ;;
+            esac
+          done
+          wip_save "$num" "$do_restart" "$custom_name"
           ;;
         "ls"|"list")
           # List is global by default, unless --ws flag or physically in workspace
