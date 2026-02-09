@@ -1,12 +1,33 @@
 # Changelog
 
+## [0.7.0] - 2026-02-08
+
+### Added
+- **Session management**: track and resume Claude conversations
+  - `crab session ls` — list sessions with inline summaries
+  - `crab session start "name"` — start new named session
+  - `crab session resume "name"` — resume existing session
+  - `crab session delete "name"` — delete a session
+  - Sessions stored in `~/.crabcode/sessions/<project>/`
+
+- **PR Review system**: structured PR review with Claude agent teams
+  - `crab review <PR>` — quick review (number, repo#number, or full URL)
+  - `crab review new` — interactive mode for multiple PRs + custom context
+  - `crab review ls` — list review sessions
+  - `crab review resume <PR>` — resume a review
+  - PR context auto-fetched via gh CLI
+
+### Changed
+- `crab restart` now fully recreates window layout (fixes missing panes after close)
+- Team mode always enabled (instructions in .claude/CLAUDE.md)
+- Removed `--team` flag (no longer needed)
+
 ## [0.6.0] - 2026-02-05
 
 ### Added
-- **Agent Teams integration**: start Claude Code with collaborative agent teams
-  - `crab ws <N> --team` — start workspace with agent team mode
-  - `crab ws <N> --team "custom prompt"` — start with custom team prompt
-  - Default team prompt for generic multi-agent collaboration
+- **Agent Teams integration**: team mode always enabled in workspaces
+  - Team instructions auto-added to `.claude/CLAUDE.md`
+  - Claude spawns agent teammates when tasks warrant parallel work
 - Environment setup for agent teams feature (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS`)
 - Tmux teammate mode for split-pane agent display
 

@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.6.0"
+VERSION="0.7.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -6133,6 +6133,25 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  SESSION COMMANDS (crab session ...)                                          ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab session ls           List sessions with summaries                       ║
+║  crab session start "name" Start new named session                            ║
+║  crab session resume "name" Resume existing session                           ║
+║  crab session delete "name" Delete a session                                  ║
+║  crab session summary "name" "text"  Update session summary                   ║
+║                                                                               ║
+║  REVIEW COMMANDS (crab review ...)                                            ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab review <PR>          Quick review (number, repo#num, or URL)            ║
+║  crab review new           Interactive mode (multiple PRs + context)          ║
+║  crab review ls            List review sessions                               ║
+║  crab review resume <PR>   Resume a review session                            ║
+║                                                                               ║
+║  PR formats: 3230, promptfoo#456, https://github.com/.../pull/123            ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  WIP COMMANDS (crab wip ...)                                                  ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab wip save              Save current changes (branch, commits, patches)   ║
@@ -6264,6 +6283,18 @@ show_help() {
   echo "  restart           Restart current workspace"
   echo "  cleanup           Cleanup current workspace"
   echo "  continue          Continue current workspace"
+  echo ""
+  echo "Session Commands:"
+  echo "  session ls        List sessions with summaries"
+  echo "  session start     Start new named session"
+  echo "  session resume    Resume existing session"
+  echo "  session delete    Delete a session"
+  echo ""
+  echo "Review Commands:"
+  echo "  review <PR>       Quick review (number, repo#num, or URL)"
+  echo "  review new        Interactive (multiple PRs + context)"
+  echo "  review ls         List review sessions"
+  echo "  review resume     Resume a review"
   echo ""
   echo "WIP Commands:"
   echo "  wip save          Save current changes"
@@ -6658,6 +6689,621 @@ EOF
 }
 
 # =============================================================================
+# Session Management
+# =============================================================================
+
+SESSIONS_DIR="$CONFIG_DIR/sessions"
+
+# Get sessions directory for current project
+get_sessions_dir() {
+  local project="${PROJECT_ALIAS:-default}"
+  echo "$SESSIONS_DIR/$project"
+}
+
+# Create a new session
+# Usage: session_create "name" ["context content"]
+session_create() {
+  local name="$1"
+  local context="${2:-}"
+  local sessions_dir=$(get_sessions_dir)
+  local session_dir="$sessions_dir/$name"
+
+  if [ -d "$session_dir" ]; then
+    error "Session '$name' already exists"
+    echo "Use 'crab session resume $name' to continue it"
+    return 1
+  fi
+
+  mkdir -p "$session_dir"
+
+  # Create session.yaml
+  cat > "$session_dir/session.yaml" << EOF
+name: $name
+project: ${PROJECT_ALIAS:-default}
+created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+claude_session_id: ""
+summary: ""
+type: general
+EOF
+
+  # Write context if provided
+  if [ -n "$context" ]; then
+    echo "$context" > "$session_dir/context.md"
+  fi
+
+  echo "$session_dir"
+}
+
+# Update session metadata
+# Usage: session_update "name" "field" "value"
+session_update() {
+  local name="$1"
+  local field="$2"
+  local value="$3"
+  local sessions_dir=$(get_sessions_dir)
+  local session_file="$sessions_dir/$name/session.yaml"
+
+  if [ ! -f "$session_file" ]; then
+    error "Session '$name' not found"
+    return 1
+  fi
+
+  yq -i ".$field = \"$value\"" "$session_file"
+}
+
+# Get session field
+# Usage: session_get "name" "field"
+session_get() {
+  local name="$1"
+  local field="$2"
+  local sessions_dir=$(get_sessions_dir)
+  local session_file="$sessions_dir/$name/session.yaml"
+
+  if [ ! -f "$session_file" ]; then
+    return 1
+  fi
+
+  yq -r ".$field // \"\"" "$session_file"
+}
+
+# List all sessions with summaries
+session_list() {
+  local sessions_dir=$(get_sessions_dir)
+  local filter="${1:-}"  # Optional filter like "review"
+
+  if [ ! -d "$sessions_dir" ]; then
+    echo -e "${GRAY}No sessions yet.${NC}"
+    echo "Start one with: crab session start \"name\""
+    return
+  fi
+
+  local found=false
+  local project_label=""
+  [ -n "$PROJECT_ALIAS" ] && project_label="@$PROJECT_ALIAS "
+
+  echo -e "${BOLD}${project_label}Sessions:${NC}"
+  echo ""
+
+  for session_dir in "$sessions_dir"/*/; do
+    [ -d "$session_dir" ] || continue
+    local name=$(basename "$session_dir")
+    local session_file="$session_dir/session.yaml"
+
+    [ -f "$session_file" ] || continue
+
+    # Apply filter if provided
+    if [ -n "$filter" ]; then
+      local type=$(yq -r '.type // "general"' "$session_file")
+      [[ "$name" == "$filter"* ]] || [[ "$type" == "$filter" ]] || continue
+    fi
+
+    found=true
+    local summary=$(yq -r '.summary // ""' "$session_file")
+    local last_accessed=$(yq -r '.last_accessed // ""' "$session_file")
+    local type=$(yq -r '.type // "general"' "$session_file")
+
+    # Format time ago
+    local time_ago=""
+    if [ -n "$last_accessed" ] && [ "$last_accessed" != "null" ]; then
+      local timestamp=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$last_accessed" "+%s" 2>/dev/null || echo "")
+      if [ -n "$timestamp" ]; then
+        local now=$(date "+%s")
+        local diff=$((now - timestamp))
+        if [ $diff -lt 60 ]; then
+          time_ago="just now"
+        elif [ $diff -lt 3600 ]; then
+          time_ago="$((diff / 60))m ago"
+        elif [ $diff -lt 86400 ]; then
+          time_ago="$((diff / 3600))h ago"
+        else
+          time_ago="$((diff / 86400))d ago"
+        fi
+      fi
+    fi
+
+    # Truncate summary if too long
+    [ ${#summary} -gt 50 ] && summary="${summary:0:47}..."
+
+    # Color based on type
+    local type_color="$GRAY"
+    [[ "$type" == "review" ]] && type_color="$CYAN"
+
+    printf "  ${BOLD}%-20s${NC} ${type_color}%-50s${NC} ${GRAY}%s${NC}\n" "$name" "\"$summary\"" "$time_ago"
+  done
+
+  if [ "$found" = false ]; then
+    echo -e "  ${GRAY}(none)${NC}"
+  fi
+  echo ""
+}
+
+# Start a new session and launch Claude
+session_start() {
+  local name="$1"
+  local context="${2:-}"
+
+  local session_dir=$(session_create "$name" "$context")
+  [ $? -eq 0 ] || return 1
+
+  echo -e "${CYAN}Starting session: $name${NC}"
+
+  # Start Claude and capture session ID
+  local context_file="$session_dir/context.md"
+  local claude_args=""
+
+  if [ -f "$context_file" ]; then
+    echo -e "  Context loaded from: $context_file"
+    claude_args="-p \"$(cat "$context_file" | head -c 1000)\""
+  fi
+
+  # Update last accessed
+  session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  # Run Claude interactively
+  cd "$(pwd)"
+  if [ -f "$context_file" ]; then
+    claude --print "$context_file"
+  else
+    claude
+  fi
+
+  # After Claude exits, prompt for summary if empty
+  local current_summary=$(session_get "$name" "summary")
+  if [ -z "$current_summary" ] || [ "$current_summary" = "null" ]; then
+    echo ""
+    read -p "Session summary (optional): " summary
+    if [ -n "$summary" ]; then
+      session_update "$name" "summary" "$summary"
+    fi
+  fi
+}
+
+# Resume an existing session
+session_resume() {
+  local name="$1"
+  local sessions_dir=$(get_sessions_dir)
+  local session_dir="$sessions_dir/$name"
+  local session_file="$session_dir/session.yaml"
+
+  if [ ! -f "$session_file" ]; then
+    error "Session '$name' not found"
+    echo "Use 'crab session ls' to see available sessions"
+    return 1
+  fi
+
+  echo -e "${CYAN}Resuming session: $name${NC}"
+
+  local summary=$(session_get "$name" "summary")
+  [ -n "$summary" ] && [ "$summary" != "null" ] && echo -e "  ${GRAY}$summary${NC}"
+
+  # Update last accessed
+  session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  # Resume Claude with --continue
+  claude --continue
+}
+
+# Delete a session
+session_delete() {
+  local name="$1"
+  local sessions_dir=$(get_sessions_dir)
+  local session_dir="$sessions_dir/$name"
+
+  if [ ! -d "$session_dir" ]; then
+    error "Session '$name' not found"
+    return 1
+  fi
+
+  read -p "Delete session '$name'? [y/N] " confirm
+  if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    rm -rf "$session_dir"
+    success "Deleted session: $name"
+  else
+    echo "Cancelled."
+  fi
+}
+
+# Handle session commands
+handle_session_command() {
+  local cmd="${1:-ls}"
+  shift || true
+
+  case "$cmd" in
+    "ls"|"list")
+      session_list "$@"
+      ;;
+    "start"|"new")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        read -p "Session name: " name
+        [ -z "$name" ] && { error "Name required"; return 1; }
+      fi
+      session_start "$name"
+      ;;
+    "resume"|"continue")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify session name: crab session resume <name>"
+        return 1
+      fi
+      session_resume "$name"
+      ;;
+    "delete"|"rm")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify session name: crab session delete <name>"
+        return 1
+      fi
+      session_delete "$name"
+      ;;
+    "summary")
+      local name="${1:-}"
+      local summary="${2:-}"
+      if [ -z "$name" ]; then
+        error "Usage: crab session summary <name> \"summary text\""
+        return 1
+      fi
+      if [ -z "$summary" ]; then
+        read -p "Summary: " summary
+      fi
+      session_update "$name" "summary" "$summary"
+      success "Updated summary for: $name"
+      ;;
+    *)
+      error "Unknown session command: $cmd"
+      echo "Usage: crab session [ls|start|resume|delete|summary]"
+      return 1
+      ;;
+  esac
+}
+
+# =============================================================================
+# Review Commands (Sugar for Sessions)
+# =============================================================================
+
+# Parse PR identifier: number, repo#number, or full URL
+# Returns: owner repo number
+parse_pr_identifier() {
+  local pr_id="$1"
+  local owner=""
+  local repo=""
+  local number=""
+
+  if [[ "$pr_id" =~ ^https://github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+    # Full URL
+    owner="${BASH_REMATCH[1]}"
+    repo="${BASH_REMATCH[2]}"
+    number="${BASH_REMATCH[3]}"
+  elif [[ "$pr_id" =~ ^([^#]+)#([0-9]+)$ ]]; then
+    # repo#number format (submodule)
+    repo="${BASH_REMATCH[1]}"
+    number="${BASH_REMATCH[2]}"
+    # Try to get owner from git remote
+    owner=$(git remote get-url origin 2>/dev/null | sed -n 's|.*github\.com[:/]\([^/]*\)/.*|\1|p')
+  elif [[ "$pr_id" =~ ^[0-9]+$ ]]; then
+    # Just a number - use current project's main repo
+    number="$pr_id"
+    if [ -n "$MAIN_REPO" ]; then
+      local remote_url=$(cd "$MAIN_REPO" && git remote get-url origin 2>/dev/null)
+      if [[ "$remote_url" =~ github\.com[:/]([^/]+)/([^/.]+) ]]; then
+        owner="${BASH_REMATCH[1]}"
+        repo="${BASH_REMATCH[2]}"
+      fi
+    fi
+  fi
+
+  echo "$owner $repo $number"
+}
+
+# Fetch PR data using gh CLI
+fetch_pr_data() {
+  local owner="$1"
+  local repo="$2"
+  local number="$3"
+
+  if ! command_exists gh; then
+    error "gh CLI required for PR reviews"
+    echo "Install: brew install gh"
+    return 1
+  fi
+
+  local full_repo="$owner/$repo"
+
+  echo -e "${CYAN}Fetching PR #$number from $full_repo...${NC}"
+
+  # Get PR metadata
+  local pr_json=$(gh pr view "$number" --repo "$full_repo" --json title,body,headRefName,baseRefName,additions,deletions,changedFiles,url 2>/dev/null)
+  if [ -z "$pr_json" ]; then
+    error "Could not fetch PR #$number from $full_repo"
+    return 1
+  fi
+
+  local title=$(echo "$pr_json" | jq -r '.title')
+  local additions=$(echo "$pr_json" | jq -r '.additions')
+  local deletions=$(echo "$pr_json" | jq -r '.deletions')
+  local files=$(echo "$pr_json" | jq -r '.changedFiles')
+  local url=$(echo "$pr_json" | jq -r '.url')
+
+  echo -e "  Title: ${BOLD}$title${NC}"
+  echo -e "  Files: $files (+$additions / -$deletions)"
+  echo ""
+
+  # Get diff and file list
+  local diff=$(gh pr diff "$number" --repo "$full_repo" 2>/dev/null)
+  local file_list=$(gh pr diff "$number" --repo "$full_repo" --name-only 2>/dev/null)
+
+  # Return as structured output
+  cat << EOF
+# PR Review Context
+
+## PR Information
+- **Number:** #$number
+- **Repository:** $full_repo
+- **Title:** $title
+- **URL:** $url
+- **Changes:** $files files (+$additions / -$deletions)
+
+## Files Changed
+\`\`\`
+$file_list
+\`\`\`
+
+## Instructions
+Review this PR. Analyze the changes and:
+1. First, propose logical review areas (group related files)
+2. Wait for my approval on the areas
+3. Then review each area, providing specific findings with file paths and line numbers
+4. Generate a summary with actionable feedback
+
+## Diff
+\`\`\`diff
+$diff
+\`\`\`
+EOF
+}
+
+# Start a new review - interactive mode
+review_new_interactive() {
+  echo -e "${BOLD}Creating new review session${NC}"
+  echo ""
+
+  # Get session name
+  local name=""
+  read -p "Session name: " name
+  [ -z "$name" ] && { error "Name required"; return 1; }
+
+  # Collect PRs
+  local prs=()
+  echo ""
+  echo "Add PRs (empty line when done):"
+  while true; do
+    read -p "> " pr_input
+    [ -z "$pr_input" ] && break
+    prs+=("$pr_input")
+  done
+
+  if [ ${#prs[@]} -eq 0 ]; then
+    error "At least one PR required"
+    return 1
+  fi
+
+  # Collect context
+  echo ""
+  echo "Context (optional, empty line when done):"
+  local context_lines=()
+  while true; do
+    read -p "> " context_line
+    [ -z "$context_line" ] && break
+    context_lines+=("$context_line")
+  done
+
+  # Build context document
+  local context="# Review Session: $name"$'\n\n'
+
+  # Add user context if provided
+  if [ ${#context_lines[@]} -gt 0 ]; then
+    context+="## Context"$'\n'
+    for line in "${context_lines[@]}"; do
+      context+="$line"$'\n'
+    done
+    context+=$'\n'
+  fi
+
+  # Fetch and append PR data
+  context+="## Pull Requests"$'\n\n'
+
+  for pr_id in "${prs[@]}"; do
+    local parsed=($(parse_pr_identifier "$pr_id"))
+    local owner="${parsed[0]}"
+    local repo="${parsed[1]}"
+    local number="${parsed[2]}"
+
+    if [ -z "$number" ]; then
+      warn "Could not parse PR: $pr_id"
+      continue
+    fi
+
+    local pr_data=$(fetch_pr_data "$owner" "$repo" "$number")
+    context+="$pr_data"$'\n\n'
+    context+="---"$'\n\n'
+  done
+
+  # Create session
+  local sessions_dir=$(get_sessions_dir)
+  local session_dir="$sessions_dir/$name"
+  mkdir -p "$session_dir"
+
+  # Write session metadata
+  cat > "$session_dir/session.yaml" << EOF
+name: $name
+project: ${PROJECT_ALIAS:-default}
+created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+claude_session_id: ""
+summary: ""
+type: review
+prs:
+$(for pr in "${prs[@]}"; do echo "  - $pr"; done)
+EOF
+
+  # Write context
+  echo "$context" > "$session_dir/context.md"
+
+  echo ""
+  echo -e "${GREEN}Review session created: $name${NC}"
+  echo -e "Context written to: $session_dir/context.md"
+  echo ""
+
+  # Start Claude
+  read -p "Start Claude now? [Y/n] " start_now
+  if [[ ! "$start_now" =~ ^[Nn]$ ]]; then
+    session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    cd "$(pwd)"
+    claude "$session_dir/context.md"
+  fi
+}
+
+# Quick review - single PR
+review_quick() {
+  local pr_id="$1"
+
+  local parsed=($(parse_pr_identifier "$pr_id"))
+  local owner="${parsed[0]}"
+  local repo="${parsed[1]}"
+  local number="${parsed[2]}"
+
+  if [ -z "$number" ]; then
+    error "Could not parse PR identifier: $pr_id"
+    echo "Formats: 3230, repo#456, https://github.com/.../pull/123"
+    return 1
+  fi
+
+  local name="review-${repo:-pr}-$number"
+
+  # Check if session already exists
+  local sessions_dir=$(get_sessions_dir)
+  if [ -d "$sessions_dir/$name" ]; then
+    echo -e "${YELLOW}Review session already exists: $name${NC}"
+    read -p "Resume it? [Y/n] " resume
+    if [[ ! "$resume" =~ ^[Nn]$ ]]; then
+      session_resume "$name"
+      return
+    fi
+    return 1
+  fi
+
+  # Fetch PR data
+  local context=$(fetch_pr_data "$owner" "$repo" "$number")
+  [ $? -eq 0 ] || return 1
+
+  # Create session
+  local session_dir="$sessions_dir/$name"
+  mkdir -p "$session_dir"
+
+  cat > "$session_dir/session.yaml" << EOF
+name: $name
+project: ${PROJECT_ALIAS:-default}
+created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+claude_session_id: ""
+summary: ""
+type: review
+prs:
+  - $pr_id
+EOF
+
+  echo "$context" > "$session_dir/context.md"
+
+  echo -e "${GREEN}Review session created: $name${NC}"
+  echo ""
+
+  # Start Claude
+  session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  cd "$(pwd)"
+  claude "$session_dir/context.md"
+}
+
+# Handle review commands
+handle_review_command() {
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    "")
+      error "Usage: crab review <PR> or crab review new"
+      echo ""
+      echo "Commands:"
+      echo "  crab review <PR>      Quick review (number, repo#num, or URL)"
+      echo "  crab review new       Interactive mode (multiple PRs + context)"
+      echo "  crab review ls        List review sessions"
+      echo "  crab review resume    Resume a review"
+      return 1
+      ;;
+    "new")
+      review_new_interactive
+      ;;
+    "ls"|"list")
+      session_list "review"
+      ;;
+    "resume"|"continue")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify review to resume"
+        echo "Use 'crab review ls' to see reviews"
+        return 1
+      fi
+      # Handle both "review-xxx" and just the PR number/name
+      if [[ ! "$name" == review-* ]]; then
+        local parsed=($(parse_pr_identifier "$name"))
+        local repo="${parsed[1]}"
+        local number="${parsed[2]}"
+        name="review-${repo:-pr}-$number"
+      fi
+      session_resume "$name"
+      ;;
+    "delete"|"rm")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify review to delete"
+        return 1
+      fi
+      if [[ ! "$name" == review-* ]]; then
+        local parsed=($(parse_pr_identifier "$name"))
+        local repo="${parsed[1]}"
+        local number="${parsed[2]}"
+        name="review-${repo:-pr}-$number"
+      fi
+      session_delete "$name"
+      ;;
+    *)
+      # Assume it's a PR identifier
+      review_quick "$cmd"
+      ;;
+  esac
+}
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -6671,7 +7317,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -6727,6 +7373,15 @@ main() {
     "pf"|"promptfoo")
       # Promptfoo target discovery agent
       handle_pf_command "${@:2}"
+      ;;
+    "session"|"sessions")
+      # Session management
+      handle_session_command "${@:2}"
+      ;;
+    "review")
+      # PR review sessions
+      load_config 2>/dev/null || true
+      handle_review_command "${@:2}"
       ;;
     "projects"|"project"|"proj")
       show_projects "${@:2}"
