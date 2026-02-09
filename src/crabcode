@@ -7192,13 +7192,45 @@ EOF
     claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
 
     # Prompt for summary after Claude exits
-    echo ""
-    read -p "Review summary (optional): " summary
-    if [ -n "$summary" ]; then
-      session_update "$name" "summary" "$summary"
-      success "Summary saved"
-    fi
+    _prompt_review_summary "$name"
   fi
+}
+
+# Prompt for review summary with auto-generate option
+_prompt_review_summary() {
+  local name="$1"
+  echo ""
+  echo "Save a summary for this review?"
+  echo "  [a] Auto-generate (Claude summarizes)"
+  echo "  [m] Manual (type your own)"
+  echo "  [s] Skip"
+  read -p "Choice [a/m/s]: " choice
+
+  case "$choice" in
+    a|A|"")
+      echo -e "${CYAN}Generating summary...${NC}"
+      local summary=$(claude --continue --print -p "Summarize this review session in ONE short line (under 60 chars). Format: '<main finding/status> - <key detail>'. Example: 'Found 3 issues - N+1 query, missing index, race condition'. Just output the summary, nothing else." 2>/dev/null | tail -1)
+      if [ -n "$summary" ]; then
+        # Clean up the summary (remove quotes if present)
+        summary="${summary#\"}"
+        summary="${summary%\"}"
+        session_update "$name" "summary" "$summary"
+        echo -e "Summary: ${GREEN}$summary${NC}"
+      else
+        echo -e "${YELLOW}Could not generate summary${NC}"
+      fi
+      ;;
+    m|M)
+      read -p "Summary: " summary
+      if [ -n "$summary" ]; then
+        session_update "$name" "summary" "$summary"
+        success "Summary saved"
+      fi
+      ;;
+    *)
+      echo "Skipped"
+      ;;
+  esac
 }
 
 # Quick review - single PR
@@ -7261,12 +7293,7 @@ EOF
   claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
 
   # Prompt for summary after Claude exits
-  echo ""
-  read -p "Review summary (optional): " summary
-  if [ -n "$summary" ]; then
-    session_update "$name" "summary" "$summary"
-    success "Summary saved"
-  fi
+  _prompt_review_summary "$name"
 }
 
 # Handle review commands
