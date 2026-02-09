@@ -1698,21 +1698,25 @@ restart_workspace() {
 
     if [ -n "$old_window" ]; then
       echo "  Recreating workspace layout..."
-      # Create new window with temp name first
-      local temp_name="_restart_temp_$$"
-      create_workspace_layout "$temp_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
 
-      # Kill old window
-      tmux kill-window -t "$SESSION_NAME:$old_window" 2>/dev/null || true
+      # Create new window with correct name directly
+      # First, rename old window to temp so we can use the proper name
+      local temp_old="_old_$$"
+      tmux rename-window -t "$SESSION_NAME:$old_window" "$temp_old" 2>/dev/null || true
 
-      # Rename temp to proper name
-      tmux rename-window -t "$SESSION_NAME:$temp_name" "$window_name" 2>/dev/null || true
+      # Now create new window with correct name
+      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
+
+      # Switch to new window
+      tmux select-window -t "$SESSION_NAME:$window_name"
+
+      # Kill old window (now named temp_old) via run-shell so it doesn't kill us
+      tmux run-shell -t "$SESSION_NAME" "tmux kill-window -t '$SESSION_NAME:$temp_old' 2>/dev/null || true"
 
       # Record mood event
       mood_record_event "restart" "workspace $num"
 
       success "Workspace $num restarted with fresh layout!"
-      tmux select-window -t "$SESSION_NAME:$window_name"
     else
       echo -e "${YELLOW}  No existing window found - creating new...${NC}"
       create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
