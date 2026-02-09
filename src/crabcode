@@ -7190,6 +7190,14 @@ EOF
     session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     cd "$(pwd)"
     claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
+
+    # Prompt for summary after Claude exits
+    echo ""
+    read -p "Review summary (optional): " summary
+    if [ -n "$summary" ]; then
+      session_update "$name" "summary" "$summary"
+      success "Summary saved"
+    fi
   fi
 }
 
@@ -7251,6 +7259,14 @@ EOF
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   cd "$(pwd)"
   claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
+
+  # Prompt for summary after Claude exits
+  echo ""
+  read -p "Review summary (optional): " summary
+  if [ -n "$summary" ]; then
+    session_update "$name" "summary" "$summary"
+    success "Summary saved"
+  fi
 }
 
 # Handle review commands
