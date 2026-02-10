@@ -7731,25 +7731,202 @@ handle_review_command() {
 }
 
 # Handle court command (shortcut for crab court <PR>)
-handle_court_command() {
-  local pr_id="${1:-}"
+# Court review - interactive mode for multiple PRs
+court_new_interactive() {
+  echo "Creating new court review session"
+  echo ""
 
-  if [ -z "$pr_id" ]; then
-    error "Usage: crab court <PR>"
+  # Get session name
+  local name=""
+  read -p "Session name: " name
+  [ -z "$name" ] && { error "Name required"; return 1; }
+  name="court-$name"
+
+  # Check if codex CLI is available
+  if ! command_exists codex; then
+    warn "Codex CLI not found. Install with: npm install -g @openai/codex"
+    echo "Court review will proceed with Claude teammate only."
     echo ""
-    echo "Court review: thorough multi-agent review with:"
-    echo "  - Judge (Claude) - orchestrates, verifies, delivers verdict"
-    echo "  - Reviewer A (Claude teammate) - independent review"
-    echo "  - Reviewer B (Codex) - independent review"
-    echo ""
-    echo "Examples:"
-    echo "  crab court 3230"
-    echo "  crab court promptfoo#456"
-    echo "  crab court https://github.com/org/repo/pull/123"
+  fi
+
+  # Collect PRs
+  local prs=()
+  echo ""
+  echo "Add PRs (empty line when done):"
+  while true; do
+    read -p "> " pr_input
+    [ -z "$pr_input" ] && break
+    prs+=("$pr_input")
+  done
+
+  if [ ${#prs[@]} -eq 0 ]; then
+    error "At least one PR required"
     return 1
   fi
 
-  review_court "$pr_id"
+  # Collect context
+  echo ""
+  echo "Additional context (optional, empty line when done):"
+  local context_lines=()
+  while true; do
+    read -p "> " context_line
+    [ -z "$context_line" ] && break
+    context_lines+=("$context_line")
+  done
+
+  # Show the court intro
+  _show_court_intro
+
+  # Build context document with court instructions
+  local court_instructions=$(get_court_instructions)
+  local context="# Court Review Session: $name"$'\n\n'
+  context+="$court_instructions"$'\n\n'
+
+  # Add user context if provided
+  if [ ${#context_lines[@]} -gt 0 ]; then
+    context+="## Additional Context"$'\n'
+    for line in "${context_lines[@]}"; do
+      context+="$line"$'\n'
+    done
+    context+=$'\n'
+  fi
+
+  # Fetch and append PR data
+  context+="## Pull Requests"$'\n\n'
+
+  for pr_id in "${prs[@]}"; do
+    local parsed=($(parse_pr_identifier "$pr_id"))
+    local owner="${parsed[0]}"
+    local repo="${parsed[1]}"
+    local number="${parsed[2]}"
+
+    if [ -z "$number" ]; then
+      warn "Could not parse PR: $pr_id"
+      continue
+    fi
+
+    # Fetch PR data without court instructions (we already added them above)
+    local pr_data=$(fetch_pr_data "$owner" "$repo" "$number" "standard")
+    context+="$pr_data"$'\n\n'
+    context+="---"$'\n\n'
+  done
+
+  # Create session
+  local sessions_dir=$(get_sessions_dir)
+  local session_dir="$sessions_dir/$name"
+  mkdir -p "$session_dir"
+
+  # Write session metadata
+  cat > "$session_dir/session.yaml" << EOF
+name: $name
+project: ${PROJECT_ALIAS:-default}
+created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+claude_session_id: ""
+summary: ""
+type: court
+prs:
+$(for pr in "${prs[@]}"; do echo "  - $pr"; done)
+EOF
+
+  # Write context
+  echo "$context" > "$session_dir/context.md"
+
+  echo ""
+  echo -e "${GREEN}Court review session created: $name${NC}"
+  echo ""
+
+  # Start Claude
+  read -p "Start court session now? [Y/n] " start_now
+  if [[ ! "$start_now" =~ ^[Nn]$ ]]; then
+    session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    cd "$session_dir"
+    claude --dangerously-skip-permissions --chrome "context.md"
+
+    # Prompt for summary after Claude exits
+    _prompt_review_summary "$name"
+  fi
+}
+
+# Handle court command
+handle_court_command() {
+  local cmd="${1:-}"
+  shift 2>/dev/null || true
+
+  case "$cmd" in
+    "")
+      error "Usage: crab court <PR> or crab court new"
+      echo ""
+      echo "Court review: thorough multi-agent review with:"
+      echo "  - Judge (Claude) - orchestrates, verifies, delivers verdict"
+      echo "  - Reviewer A (Claude teammate) - independent review"
+      echo "  - Reviewer B (Codex) - independent review"
+      echo ""
+      echo "Commands:"
+      echo "  crab court <PR>        Quick court review for single PR"
+      echo "  crab court new         Interactive mode (multiple PRs + context)"
+      echo "  crab court ls          List court sessions"
+      echo "  crab court resume      Resume a court session"
+      echo "  crab court show        View saved court output"
+      echo "  crab court delete      Delete a court session"
+      return 1
+      ;;
+    "new")
+      court_new_interactive
+      ;;
+    "ls"|"list")
+      session_list "court"
+      ;;
+    "resume"|"continue")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify court session to resume"
+        echo "Use 'crab court ls' to see sessions"
+        return 1
+      fi
+      # Handle both "court-xxx" and just the name
+      if [[ ! "$name" == court-* ]]; then
+        name="court-$name"
+      fi
+      session_resume "$name"
+      ;;
+    "show"|"view"|"output")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify court session to view"
+        echo "Usage: crab court show <name>"
+        return 1
+      fi
+      if [[ ! "$name" == court-* ]]; then
+        name="court-$name"
+      fi
+      local sessions_dir=$(get_sessions_dir)
+      local output_file="$sessions_dir/$name/review-output.md"
+      if [ -f "$output_file" ]; then
+        echo "Court verdict for: $name"
+        echo ""
+        cat "$output_file"
+      else
+        error "No saved verdict for '$name'"
+        echo "Resume the court session and have the judge deliver a verdict."
+      fi
+      ;;
+    "delete"|"rm")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify court session to delete"
+        return 1
+      fi
+      if [[ ! "$name" == court-* ]]; then
+        name="court-$name"
+      fi
+      session_delete "$name"
+      ;;
+    *)
+      # Assume it's a PR identifier
+      review_court "$cmd"
+      ;;
+  esac
 }
 
 # =============================================================================
