@@ -309,7 +309,7 @@ resolve_command_aliases() {
   fi
 
   local resolved
-  resolved=$(yq -r ".aliases.\"$cmd\" // \"\"" "$GLOBAL_CONFIG" 2>/dev/null)
+  resolved=$(cmd="$cmd" yq -r '.aliases.[strenv(cmd)] // ""' "$GLOBAL_CONFIG" 2>/dev/null)
   if [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
     echo "$resolved"
     return 0
@@ -8047,7 +8047,7 @@ handle_alias_command() {
       fi
 
       local aliases
-      aliases=$(yq -r '.aliases // {} | to_entries[] | .key + " → " + .value' "$GLOBAL_CONFIG" 2>/dev/null)
+      aliases=$(yq -r '.aliases // {} | to_entries[] | .key + " → " + (.value | tostring)' "$GLOBAL_CONFIG" 2>/dev/null)
       if [ -z "$aliases" ]; then
         echo -e "${YELLOW}No aliases configured.${NC}"
         echo ""
@@ -8071,6 +8071,12 @@ handle_alias_command() {
         error "Usage: crab alias set <name> <command...>"
         exit 1
       fi
+      # Validate alias name
+      if ! [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        error "Invalid alias name '$name'. Use only letters, numbers, hyphens, and underscores."
+        exit 1
+      fi
+
       shift 2
       local value="$*"
       if [ -z "$value" ]; then
@@ -8084,7 +8090,7 @@ handle_alias_command() {
         echo "{}" > "$GLOBAL_CONFIG"
       fi
 
-      yq -i ".aliases.\"$name\" = \"$value\"" "$GLOBAL_CONFIG"
+      NAME="$name" VALUE="$value" yq -i '.aliases.[strenv(NAME)] = strenv(VALUE)' "$GLOBAL_CONFIG"
       echo -e "${GREEN}Alias set:${NC} $name → $value"
       ;;
     "rm"|"remove"|"delete")
@@ -8100,13 +8106,13 @@ handle_alias_command() {
       fi
 
       local existing
-      existing=$(yq -r ".aliases.\"$name\" // \"\"" "$GLOBAL_CONFIG" 2>/dev/null)
+      existing=$(NAME="$name" yq -r '.aliases.[strenv(NAME)] // ""' "$GLOBAL_CONFIG" 2>/dev/null)
       if [ -z "$existing" ] || [ "$existing" = "null" ]; then
         error "Alias '$name' not found"
         exit 1
       fi
 
-      yq -i "del(.aliases.\"$name\")" "$GLOBAL_CONFIG"
+      NAME="$name" yq -i 'del(.aliases.[strenv(NAME)])' "$GLOBAL_CONFIG"
 
       # Clean up empty aliases map
       local remaining
@@ -8144,9 +8150,9 @@ main() {
   # Resolve user-configured command aliases (before project + command dispatch)
   if resolved=$(resolve_command_aliases "${1:-}"); then
     shift
-    # Split resolved alias into words and prepend to remaining args
-    # shellcheck disable=SC2086
-    set -- $resolved "$@"
+    # Split resolved alias into words without glob expansion
+    read -r -a resolved_parts <<<"$resolved"
+    set -- "${resolved_parts[@]}" "$@"
   fi
 
   # For project-aware commands, resolve project (cwd-first, then default)

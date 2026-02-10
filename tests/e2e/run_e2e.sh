@@ -424,6 +424,57 @@ rm -rf test-share-dir
 echo ""
 
 # =============================================================================
+# Test 12: Command Aliases
+# =============================================================================
+
+log "Testing command aliases..."
+
+# List aliases (should be empty initially)
+run_test "crab alias (empty)" \
+  "crab alias" \
+  "No aliases configured"
+
+# Set a single-word alias
+run_test "crab alias set (single word)" \
+  "crab alias set cu cleanup" \
+  "Alias set.*cu.*cleanup"
+
+# List aliases (should show the alias)
+run_test "crab alias (lists alias)" \
+  "crab alias" \
+  "cu.*cleanup"
+
+# Set a multi-word alias
+run_test "crab alias set (multi-word)" \
+  "crab alias set wn 'ws new'" \
+  "Alias set.*wn.*ws new"
+
+# List aliases (should show both)
+run_test "crab alias (lists multiple)" \
+  "crab alias" \
+  "cu.*cleanup"
+
+# Remove an alias
+run_test "crab alias rm" \
+  "crab alias rm cu" \
+  "Removed alias.*cu"
+
+# Verify removed alias is gone
+run_test "crab alias rm (alias removed)" \
+  "crab alias rm cu 2>&1" \
+  "not found"
+
+# Invalid alias name rejected
+run_test "crab alias set (invalid name rejected)" \
+  "crab alias set 'bad name!' cleanup 2>&1" \
+  "Invalid alias name"
+
+# Clean up remaining test alias
+crab alias rm wn 2>/dev/null || true
+
+echo ""
+
+# =============================================================================
 # Summary
 # =============================================================================
 
