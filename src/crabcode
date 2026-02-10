@@ -1936,7 +1936,7 @@ build_ticket_prompt() {
   local default_prompt='Fetch the Linear ticket {identifier} using your Linear MCP tools. Read the ticket title, description, and any relevant comments. Then:
 1. Create and checkout a git branch using the ticket'\''s suggested branch name from Linear
 2. Analyze the requirements from the ticket
-3. Begin implementing the changes described in the ticket
+3. Create an implementation plan and enter plan mode for my approval before writing any code
 If you need clarification on the requirements, ask me before proceeding.'
 
   local template
