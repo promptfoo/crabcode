@@ -424,6 +424,89 @@ rm -rf test-share-dir
 echo ""
 
 # =============================================================================
+# Test 12: Ticket Command - Validation
+# =============================================================================
+
+log "Testing ticket command validation..."
+
+# No args - should show usage
+run_test "crab ticket (no args) shows usage" \
+  "crabcode ticket 2>&1" \
+  "Usage.*crab ticket"
+
+# Invalid identifiers - should be rejected
+run_test "crab ticket rejects semicolons" \
+  "crabcode ticket 'foo;bar' 2>&1" \
+  "Invalid ticket identifier"
+
+run_test "crab ticket rejects spaces" \
+  "crabcode ticket 'foo bar' 2>&1" \
+  "Invalid ticket identifier"
+
+run_test "crab ticket rejects shell metacharacters" \
+  "crabcode ticket 'ENG\$(whoami)' 2>&1" \
+  "Invalid ticket identifier"
+
+run_test "crab ticket rejects template placeholder" \
+  "crabcode ticket '{identifier}' 2>&1" \
+  "Invalid ticket identifier"
+
+# Valid identifiers - should pass validation (may fail at tmux, but not validation)
+output=$(crabcode ticket ENG-123 2>&1 || true)
+if echo "$output" | grep -q "Invalid ticket identifier"; then
+  fail "crab ticket ENG-123 rejected by validation" "$output"
+else
+  pass "crab ticket ENG-123 passes validation"
+fi
+
+output=$(crabcode ticket PROJ_42 2>&1 || true)
+if echo "$output" | grep -q "Invalid ticket identifier"; then
+  fail "crab ticket PROJ_42 rejected by validation" "$output"
+else
+  pass "crab ticket PROJ_42 passes validation"
+fi
+
+# ws N ticket validation
+run_test "crab ws 1 ticket (no id) shows error" \
+  "crabcode ws 1 ticket 2>&1" \
+  "Ticket identifier required"
+
+run_test "crab ws 1 ticket rejects bad id" \
+  "crabcode ws 1 ticket 'bad!id' 2>&1" \
+  "Invalid ticket identifier"
+
+output=$(crabcode ws 1 ticket ENG-456 2>&1 || true)
+if echo "$output" | grep -q "Invalid ticket identifier"; then
+  fail "crab ws 1 ticket ENG-456 rejected by validation" "$output"
+else
+  pass "crab ws 1 ticket ENG-456 passes validation"
+fi
+
+echo ""
+
+# =============================================================================
+# Test 13: Ticket Command - Prompt Building
+# =============================================================================
+
+log "Testing ticket prompt generation..."
+
+# When a valid ticket is used, verify the workspace is created and
+# the output indicates ticket mode
+output=$(crabcode ticket TEST-789 2>&1 || true)
+if echo "$output" | grep -qE "workspace.*ticket prompt|Using next available workspace"; then
+  pass "crab ticket TEST-789 enters ticket mode"
+else
+  # May fail at tmux but should at least pick a workspace
+  if echo "$output" | grep -qE "Using next available workspace|Starting.*session"; then
+    pass "crab ticket TEST-789 picks workspace and starts"
+  else
+    fail "crab ticket TEST-789 did not enter ticket mode" "$output"
+  fi
+fi
+
+echo ""
+
+# =============================================================================
 # Summary
 # =============================================================================
 
