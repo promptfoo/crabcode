@@ -313,18 +313,28 @@ See `examples/` for more configuration examples.
 
 ## Requirements
 
+**Core:**
 - bash
 - tmux
 - git
 - [yq](https://github.com/mikefarah/yq) (YAML parsing)
 - zip (for toolkit share)
 
+**For PR reviews (`crab review`, `crab court`):**
+- [gh](https://cli.github.com/) (GitHub CLI)
+- [Claude Code](https://claude.ai/code) (`claude` CLI)
+
+**Optional (for court review with Codex):**
+- [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`)
+
 ```bash
 # macOS
-brew install tmux yq zip
+brew install tmux yq zip gh
+npm install -g @anthropic-ai/claude-code  # Claude Code
 
 # Ubuntu/Debian
-apt install tmux yq zip
+apt install tmux yq zip gh
+npm install -g @anthropic-ai/claude-code
 ```
 
 ## Installation
