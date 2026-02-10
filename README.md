@@ -179,6 +179,34 @@ crab pf uninstall                            # Remove the plugin
 
 The agent probes the target, figures out the protocol (HTTP, WebSocket, polling, etc.), generates the config, and verifies it works.
 
+### PR Review Commands (`crab review`, `crab court`)
+
+Two modes for reviewing pull requests:
+
+```bash
+# Quick single-agent review (fast)
+crab review 3230                    # PR number
+crab review promptfoo#456           # Submodule PR
+crab review https://github.com/...  # Full URL
+
+# Court review - thorough multi-agent review
+crab court 3230                     # Judge + 2 reviewers
+```
+
+**Court Review** uses the judge pattern:
+- **Judge (Claude)**: Orchestrates, verifies findings, delivers verdict
+- **Reviewer A (Claude teammate)**: Independent code review
+- **Reviewer B (Codex)**: Independent code review
+
+The judge traces every finding to actual code, resolves disagreements, and produces a verdict with zero false positives.
+
+```bash
+crab review ls              # List review sessions
+crab review show <PR>       # View saved review output
+crab review resume <PR>     # Resume a review
+crab review delete <PR>     # Delete a review session
+```
+
 ### Other Commands
 
 ```bash

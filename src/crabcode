@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.7.0"
+VERSION="0.8.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -2244,7 +2244,7 @@ wip_list_global() {
 # Interactive restore from global WIP list
 wip_restore_global() {
   local target_ws="${1:-}"
-  local open_after="${2:-false}"
+  local open_after="${2:-true}"
 
   if [ ! -d "$WIP_BASE" ]; then
     error "No WIP states found"
@@ -2337,20 +2337,61 @@ wip_restore_global() {
       echo "Cancelled."
       return 0
     fi
+  else
+    # Check if target workspace has uncommitted changes
+    if _workspace_has_changes "$target_dir"; then
+      echo -e "${YELLOW}Workspace $restore_to_ws has uncommitted changes.${NC}"
+      echo ""
+      echo "  [1] Restore anyway (may conflict)"
+      echo "  [2] Create a new workspace"
+      echo "  [0] Cancel"
+      echo ""
+      read -p "Choice [0-2]: " conflict_choice
+      case "$conflict_choice" in
+        1) ;; # Continue with restore
+        2)
+          # Find next available workspace
+          local next_ws=$(find_next_workspace)
+          echo -e "${CYAN}Creating workspace $next_ws...${NC}"
+          create_workspace "$next_ws"
+          restore_to_ws="$next_ws"
+          ;;
+        *)
+          echo "Cancelled."
+          return 0
+          ;;
+      esac
+    fi
   fi
 
   local wip_name=$(basename "$selected_wip")
   echo ""
   echo -e "${CYAN}Restoring WIP: $wip_name -> workspace $restore_to_ws${NC}"
 
-  _restore_wip "$restore_to_ws" "$selected_wip" "$open_after"
+  _restore_wip "$restore_to_ws" "$selected_wip" "true"
+}
+
+# Check if workspace directory has uncommitted changes
+_workspace_has_changes() {
+  local dir="$1"
+  [ ! -d "$dir" ] && return 1
+  cd "$dir"
+  # Check for any changes (staged, unstaged, or untracked)
+  if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+    return 0
+  fi
+  # Check for untracked files
+  if [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+    return 0
+  fi
+  return 1
 }
 
 # Restore by index from global list
 wip_restore_by_index() {
   local index="$1"
   local target_ws="$2"
-  local open_after="${3:-false}"
+  local open_after="${3:-true}"
 
   if [ ! -d "$WIP_BASE" ]; then
     error "No WIP states found"
@@ -2411,17 +2452,42 @@ wip_restore_by_index() {
       echo "Cancelled."
       return 0
     fi
+  else
+    # Check if target workspace has uncommitted changes
+    if _workspace_has_changes "$target_dir"; then
+      echo -e "${YELLOW}Workspace $restore_to_ws has uncommitted changes.${NC}"
+      echo ""
+      echo "  [1] Restore anyway (may conflict)"
+      echo "  [2] Create a new workspace"
+      echo "  [0] Cancel"
+      echo ""
+      read -p "Choice [0-2]: " conflict_choice
+      case "$conflict_choice" in
+        1) ;; # Continue with restore
+        2)
+          # Find next available workspace
+          local next_ws=$(find_next_workspace)
+          echo -e "${CYAN}Creating workspace $next_ws...${NC}"
+          create_workspace "$next_ws"
+          restore_to_ws="$next_ws"
+          ;;
+        *)
+          echo "Cancelled."
+          return 0
+          ;;
+      esac
+    fi
   fi
 
   local wip_name=$(basename "$selected_wip")
   echo -e "${CYAN}Restoring WIP: $wip_name -> workspace $restore_to_ws${NC}"
 
-  _restore_wip "$restore_to_ws" "$selected_wip" "$open_after"
+  _restore_wip "$restore_to_ws" "$selected_wip" "true"
 }
 
 wip_continue() {
   local num=$1
-  local open_after="${2:-false}"
+  local open_after="${2:-true}"
   local wip_dir=$(get_wip_dir "$num")
 
   if [ ! -d "$wip_dir" ]; then
@@ -2504,10 +2570,11 @@ wip_resume() {
 _restore_wip() {
   local num=$1
   local wip_path=$2
-  local open_after="${3:-false}"
+  local open_after="${3:-true}"
   local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
   local wip_name=$(basename "$wip_path")
   local branch_name=$(get_branch_name "$num")
+  local original_dir=$(pwd)  # Save original directory before cd'ing
 
   local metadata="$wip_path/metadata.json"
   local saved_branch="$branch_name"
@@ -2640,10 +2707,9 @@ _restore_wip() {
 
   success "WIP restored: $wip_name"
 
-  # Check if user is already in the workspace
-  local current_dir=$(pwd)
-  if [[ "$current_dir" == "$dir"* ]]; then
-    # Already in workspace, no need to tell them to open it
+  # Check if user was already in the workspace when they started
+  if [[ "$original_dir" == "$dir"* ]]; then
+    # Already in workspace, no need to open it
     :
   elif [ "$open_after" = "true" ]; then
     echo ""
@@ -6895,7 +6961,13 @@ session_list() {
     local type_color="$CYAN"
     [[ "$type" == "general" ]] && type_color="$GRAY"
 
-    printf "  ${BOLD}%-20s${NC} ${type_color}%-50b${NC} ${GRAY}%s${NC}\n" "$name" "$summary_display" "$time_ago"
+    # Check if review output exists
+    local output_marker=""
+    if [ -f "$session_dir/review-output.md" ]; then
+      output_marker=" ${GREEN}[saved]${NC}"
+    fi
+
+    printf "  ${BOLD}%-20s${NC} ${type_color}%-50b${NC}%b ${GRAY}%s${NC}\n" "$name" "$summary_display" "$output_marker" "$time_ago"
   done
 
   if [ "$found" = false ]; then
@@ -6963,10 +7035,16 @@ session_resume() {
   local summary=$(session_get "$name" "summary")
   [ -n "$summary" ] && [ "$summary" != "null" ] && echo -e "  ${GRAY}$summary${NC}"
 
+  # Show if review output exists
+  if [ -f "$session_dir/review-output.md" ]; then
+    echo -e "  ${GREEN}Review output saved${NC}"
+  fi
+
   # Update last accessed
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-  # Resume Claude with --continue
+  # Resume Claude from session directory
+  cd "$session_dir"
   claude --dangerously-skip-permissions --chrome --continue
 }
 
@@ -7082,11 +7160,105 @@ parse_pr_identifier() {
   echo "$owner $repo $number"
 }
 
+# Get court review instructions for the judge pattern
+get_court_instructions() {
+  cat << 'COURT_EOF'
+
+## Court Review Protocol
+
+You are the **JUDGE** in a code review court. You will orchestrate two reviewers (Claude teammate + Codex) and deliver a final verdict.
+
+### Your Role as Judge:
+- **Orchestrate** the review process
+- **Verify** all findings by tracing to actual code
+- **Investigate** when reviewers disagree
+- **Synthesize** a final verdict with zero false positives
+
+### Phase 1: Empanel the Reviewers
+
+Spawn two reviewer agents to analyze the PR independently:
+
+**Reviewer A (Claude):**
+```
+Use Task tool:
+  subagent_type: "general-purpose"
+  prompt: "You are Reviewer A. Review this PR for bugs, security issues, and code quality. Be thorough but avoid false positives. Structure findings as Critical/Warning/Suggestion with file:line references. Here is the context: [include PR diff]"
+```
+
+**Reviewer B (Codex):**
+```
+Use Task tool:
+  subagent_type: "Bash"
+  prompt: "Run: codex --print -p 'You are Reviewer B. Review this code for bugs, security issues, and quality problems. Structure as Critical/Warning/Suggestion with file:line. Diff: [include relevant sections]'"
+```
+
+Wait for BOTH reviewers to complete before proceeding.
+
+### Phase 2: Collect Testimony
+
+Document what each reviewer found:
+- List Reviewer A's findings
+- List Reviewer B's findings
+- Note agreements and disagreements
+
+### Phase 3: Verify & Investigate
+
+For EACH finding from either reviewer:
+
+1. **Trace to code**: Use Read tool to examine the actual file and line
+2. **Verify the issue**: Is this a real problem or false positive?
+3. **Check context**: Does surrounding code explain/mitigate it?
+4. **When reviewers disagree**: Investigate deeper, examine edge cases
+
+**Critical Rule**: Do NOT include any finding you haven't personally verified in the code.
+
+### Phase 4: Deliberate
+
+For each potential issue, document:
+- What was claimed
+- What you found when you traced the code
+- Your ruling: CONFIRMED / DISMISSED / NEEDS-INVESTIGATION
+- Reasoning
+
+### Phase 5: Final Verdict
+
+Write `review-output.md` with:
+
+```markdown
+# Court Review: PR #XXXX
+
+## Verdict Summary
+[1-2 sentence overall assessment]
+
+## Confirmed Issues
+[Issues verified by tracing code - include file:line and evidence]
+
+## Dismissed Claims
+[What reviewers flagged but you determined were false positives - explain why]
+
+## Recommendations
+[Actionable next steps]
+
+## Court Record
+[Summary of the review process, who found what, how disagreements were resolved]
+```
+
+### Rules of the Court:
+1. **No false positives**: Only confirm what you've verified in the code
+2. **Show your work**: Document how you verified each finding
+3. **Be thorough**: Check edge cases, error paths, security implications
+4. **Cite evidence**: Every confirmed issue needs file:line proof
+5. **Explain dismissals**: If you reject a reviewer's finding, say why
+COURT_EOF
+}
+
 # Fetch PR data using gh CLI
+# mode: "standard" (default) or "court"
 fetch_pr_data() {
   local owner="$1"
   local repo="$2"
   local number="$3"
+  local mode="${4:-standard}"
 
   if ! command_exists gh; then
     error "gh CLI required for PR reviews"
@@ -7119,6 +7291,20 @@ fetch_pr_data() {
   local diff=$(gh pr diff "$number" --repo "$full_repo" 2>/dev/null)
   local file_list=$(gh pr diff "$number" --repo "$full_repo" --name-only 2>/dev/null)
 
+  # Get instructions based on mode
+  local instructions=""
+  if [ "$mode" = "court" ]; then
+    instructions=$(get_court_instructions)
+  else
+    instructions="## Instructions
+Review this PR. Analyze the changes and:
+1. First, propose logical review areas (group related files)
+2. Wait for my approval on the areas
+3. Then review each area, providing specific findings with file paths and line numbers
+4. Generate a summary with actionable feedback
+5. **IMPORTANT:** When done, save your complete review findings to \`review-output.md\` in the current directory. Include all issues found, suggestions, and your overall assessment."
+  fi
+
   # Return as structured output
   cat << EOF
 # PR Review Context
@@ -7135,12 +7321,7 @@ fetch_pr_data() {
 $file_list
 \`\`\`
 
-## Instructions
-Review this PR. Analyze the changes and:
-1. First, propose logical review areas (group related files)
-2. Wait for my approval on the areas
-3. Then review each area, providing specific findings with file paths and line numbers
-4. Generate a summary with actionable feedback
+$instructions
 
 ## Diff
 \`\`\`diff
@@ -7241,12 +7422,12 @@ EOF
   echo -e "Context written to: $session_dir/context.md"
   echo ""
 
-  # Start Claude
+  # Start Claude from session directory so it can write review-output.md there
   read -p "Start Claude now? [Y/n] " start_now
   if [[ ! "$start_now" =~ ^[Nn]$ ]]; then
     session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    cd "$(pwd)"
-    claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
+    cd "$session_dir"
+    claude --dangerously-skip-permissions --chrome "context.md"
 
     # Prompt for summary after Claude exits
     _prompt_review_summary "$name"
@@ -7290,7 +7471,7 @@ _prompt_review_summary() {
   esac
 }
 
-# Quick review - single PR
+# Quick review - single PR (standard single-agent review)
 review_quick() {
   local pr_id="$1"
 
@@ -7320,7 +7501,7 @@ review_quick() {
   fi
 
   # Fetch PR data
-  local context=$(fetch_pr_data "$owner" "$repo" "$number")
+  local context=$(fetch_pr_data "$owner" "$repo" "$number" "standard")
   [ $? -eq 0 ] || return 1
 
   # Create session
@@ -7344,10 +7525,120 @@ EOF
   echo -e "${GREEN}Review session created: $name${NC}"
   echo ""
 
-  # Start Claude
+  # Start Claude from session directory so it can write review-output.md there
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  cd "$(pwd)"
-  claude --dangerously-skip-permissions --chrome "$session_dir/context.md"
+  cd "$session_dir"
+  claude --dangerously-skip-permissions --chrome "context.md"
+
+  # Prompt for summary after Claude exits
+  _prompt_review_summary "$name"
+}
+
+# Show fun court intro animation
+_show_court_intro() {
+  cat << 'COURT_ART'
+
+                    ⚖️  THE CRAB COURT  ⚖️
+    ┌─────────────────────────────────────────────┐
+    │                                             │
+    │            🦀 JUDGE CLAUDE 🦀               │
+    │         "Order in the court!"               │
+    │                                             │
+    │     ┌───────────┐       ┌───────────┐       │
+    │     │ Reviewer  │       │ Reviewer  │       │
+    │     │     A     │  vs   │     B     │       │
+    │     │ (Claude)  │       │  (Codex)  │       │
+    │     └───────────┘       └───────────┘       │
+    │                                             │
+    └─────────────────────────────────────────────┘
+
+COURT_ART
+
+  echo "How this works:"
+  echo ""
+  echo "  1. 📋 Empanel     Judge spawns two independent reviewers"
+  echo "  2. 🔍 Review      Both reviewers analyze the PR separately"
+  echo "  3. 📑 Collect     Judge gathers findings from both"
+  echo "  4. ✅ Verify      Judge traces each claim to actual code"
+  echo "  5. ⚖️  Deliberate  Resolve disagreements, rule on each issue"
+  echo "  6. 📝 Verdict     Final ruling with zero false positives"
+  echo ""
+  echo "Fetching PR data..."
+  echo ""
+}
+
+# Court review - Judge pattern with Claude + Codex reviewers
+review_court() {
+  local pr_id="$1"
+
+  # Immediate feedback
+  echo -e "${CYAN}Preparing court review for: $pr_id${NC}"
+  echo ""
+
+  # Check if codex CLI is available
+  if ! command_exists codex; then
+    warn "Codex CLI not found. Install with: npm install -g @openai/codex"
+    echo "Court review will proceed with Claude teammate only."
+    echo ""
+  fi
+
+  local parsed=($(parse_pr_identifier "$pr_id"))
+  local owner="${parsed[0]}"
+  local repo="${parsed[1]}"
+  local number="${parsed[2]}"
+
+  if [ -z "$number" ]; then
+    error "Could not parse PR identifier: $pr_id"
+    echo "Formats: 3230, repo#456, https://github.com/.../pull/123"
+    return 1
+  fi
+
+  local name="court-${repo:-pr}-$number"
+
+  # Check if session already exists
+  local sessions_dir=$(get_sessions_dir)
+  if [ -d "$sessions_dir/$name" ]; then
+    echo -e "${YELLOW}Court review session already exists: $name${NC}"
+    read -p "Resume it? [Y/n] " resume
+    if [[ ! "$resume" =~ ^[Nn]$ ]]; then
+      session_resume "$name"
+      return
+    fi
+    return 1
+  fi
+
+  # Show the court intro while fetching
+  _show_court_intro
+
+  # Fetch PR data with court instructions (this can take a moment for large PRs)
+  local context=$(fetch_pr_data "$owner" "$repo" "$number" "court")
+  [ $? -eq 0 ] || return 1
+
+  # Create session
+  local session_dir="$sessions_dir/$name"
+  mkdir -p "$session_dir"
+
+  cat > "$session_dir/session.yaml" << EOF
+name: $name
+project: ${PROJECT_ALIAS:-default}
+created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+claude_session_id: ""
+summary: ""
+type: court
+prs:
+  - $pr_id
+EOF
+
+  echo "$context" > "$session_dir/context.md"
+
+  echo -e "${GREEN}Court review session created: $name${NC}"
+  echo ""
+
+  # Start Claude as the judge
+  session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  cd "$session_dir"
+  claude --dangerously-skip-permissions --chrome "context.md"
 
   # Prompt for summary after Claude exits
   _prompt_review_summary "$name"
@@ -7360,13 +7651,16 @@ handle_review_command() {
 
   case "$cmd" in
     "")
-      error "Usage: crab review <PR> or crab review new"
+      error "Usage: crab review <PR> or crab court <PR>"
       echo ""
       echo "Commands:"
-      echo "  crab review <PR>      Quick review (number, repo#num, or URL)"
-      echo "  crab review new       Interactive mode (multiple PRs + context)"
-      echo "  crab review ls        List review sessions"
-      echo "  crab review resume    Resume a review"
+      echo "  crab review <PR>       Quick single-agent review"
+      echo "  crab court <PR>        Court review (Judge + 2 reviewers, thorough)"
+      echo "  crab review new        Interactive mode (multiple PRs + context)"
+      echo "  crab review ls         List review sessions"
+      echo "  crab review resume     Resume a review"
+      echo "  crab review show       View saved review output"
+      echo "  crab review delete     Delete a review session"
       return 1
       ;;
     "new")
@@ -7405,11 +7699,57 @@ handle_review_command() {
       fi
       session_delete "$name"
       ;;
+    "show"|"view"|"output")
+      local name="${1:-}"
+      if [ -z "$name" ]; then
+        error "Specify review to view"
+        echo "Usage: crab review show <name>"
+        return 1
+      fi
+      if [[ ! "$name" == review-* ]]; then
+        local parsed=($(parse_pr_identifier "$name"))
+        local repo="${parsed[1]}"
+        local number="${parsed[2]}"
+        name="review-${repo:-pr}-$number"
+      fi
+      local sessions_dir=$(get_sessions_dir)
+      local output_file="$sessions_dir/$name/review-output.md"
+      if [ -f "$output_file" ]; then
+        echo -e "${BOLD}Review output for: $name${NC}"
+        echo ""
+        cat "$output_file"
+      else
+        error "No saved review output for '$name'"
+        echo "The review hasn't been saved yet. Resume the review and ask Claude to save findings."
+      fi
+      ;;
     *)
       # Assume it's a PR identifier
       review_quick "$cmd"
       ;;
   esac
+}
+
+# Handle court command (shortcut for crab court <PR>)
+handle_court_command() {
+  local pr_id="${1:-}"
+
+  if [ -z "$pr_id" ]; then
+    error "Usage: crab court <PR>"
+    echo ""
+    echo "Court review: thorough multi-agent review with:"
+    echo "  - Judge (Claude) - orchestrates, verifies, delivers verdict"
+    echo "  - Reviewer A (Claude teammate) - independent review"
+    echo "  - Reviewer B (Codex) - independent review"
+    echo ""
+    echo "Examples:"
+    echo "  crab court 3230"
+    echo "  crab court promptfoo#456"
+    echo "  crab court https://github.com/org/repo/pull/123"
+    return 1
+  fi
+
+  review_court "$pr_id"
 }
 
 # =============================================================================
@@ -7426,7 +7766,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review"|"court")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -7491,6 +7831,11 @@ main() {
       # PR review sessions
       load_config 2>/dev/null || true
       handle_review_command "${@:2}"
+      ;;
+    "court")
+      # Court review - thorough multi-agent review
+      load_config 2>/dev/null || true
+      handle_court_command "${@:2}"
       ;;
     "projects"|"project"|"proj")
       show_projects "${@:2}"

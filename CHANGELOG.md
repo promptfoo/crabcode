@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.8.0] - 2026-02-09
+
+### Added
+- **Court Review system**: thorough multi-agent PR review with judge pattern
+  - `crab court <PR>` — spawns Judge (Claude) + Reviewer A (Claude teammate) + Reviewer B (Codex)
+  - Judge orchestrates reviewers, verifies findings by tracing actual code
+  - Resolves disagreements between reviewers, delivers verdict with zero false positives
+  - Fun ASCII art intro explaining the 6-phase process
+- **WIP restore improvements**: auto-opens workspace after restore
+  - Detects if target workspace has uncommitted changes, offers to create new workspace
+  - Saves original directory to properly detect "already in workspace"
+- **Review output saving**: Claude instructed to save findings to `review-output.md`
+  - `crab review ls` shows `[saved]` marker for reviews with output
+  - `crab review show <PR>` displays saved review output
+
+### Changed
+- Simplified review system: removed `--with-codex` and `collab` modes in favor of `crab court`
+- `crab review <PR>` now does quick single-agent review (fast, simple)
+- `crab court <PR>` is the thorough option (judge + 2 reviewers)
+
+### Fixed
+- WIP restore now properly opens workspace when run from outside (was checking wrong directory)
+- Review sessions now run from session directory so Claude can write output files
+
 ## [0.7.0] - 2026-02-08
 
 ### Added
