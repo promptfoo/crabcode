@@ -7581,34 +7581,46 @@ EOF
 
 # Show fun court intro animation
 _show_court_intro() {
-  cat << 'COURT_ART'
+  # 256-color orange/coral gradient tones
+  local C1='\033[38;5;209m'  # coral
+  local C2='\033[38;5;208m'  # orange
+  local C3='\033[38;5;214m'  # light orange
+  local C4='\033[38;5;215m'  # peach
+  local DIM='\033[2m'
+  local RST='\033[0m'
 
-                    ⚖️  THE CRAB COURT  ⚖️
-    ┌─────────────────────────────────────────────┐
-    │                                             │
-    │            🦀 JUDGE CLAUDE 🦀               │
-    │         "Order in the court!"               │
-    │                                             │
-    │     ┌───────────┐       ┌───────────┐       │
-    │     │ Reviewer  │       │ Reviewer  │       │
-    │     │     A     │  vs   │     B     │       │
-    │     │ (Claude)  │       │  (Codex)  │       │
-    │     └───────────┘       └───────────┘       │
-    │                                             │
-    └─────────────────────────────────────────────┘
-
-COURT_ART
-
-  echo "How this works:"
   echo ""
-  echo "  1. 📋 Empanel     Judge spawns two independent reviewers"
-  echo "  2. 🔍 Review      Both reviewers analyze the PR separately"
-  echo "  3. 📑 Collect     Judge gathers findings from both"
-  echo "  4. ✅ Verify      Judge traces each claim to actual code"
-  echo "  5. ⚖️  Deliberate  Resolve disagreements, rule on each issue"
-  echo "  6. 📝 Verdict     Final ruling with zero false positives"
+  # FIGlet-style banner - "CRAB COURT" (no box - cleaner look)
+  echo -e "${C1}    ██████╗██████╗  █████╗ ██████╗      ██████╗ ██████╗ ██╗   ██╗██████╗ ████████╗${RST}"
+  echo -e "${C2}   ██╔════╝██╔══██╗██╔══██╗██╔══██╗    ██╔════╝██╔═══██╗██║   ██║██╔══██╗╚══██╔══╝${RST}"
+  echo -e "${C2}   ██║     ██████╔╝███████║██████╔╝    ██║     ██║   ██║██║   ██║██████╔╝   ██║   ${RST}"
+  echo -e "${C3}   ██║     ██╔══██╗██╔══██║██╔══██╗    ██║     ██║   ██║██║   ██║██╔══██╗   ██║   ${RST}"
+  echo -e "${C3}   ╚██████╗██║  ██║██║  ██║██████╔╝    ╚██████╗╚██████╔╝╚██████╔╝██║  ██║   ██║   ${RST}"
+  echo -e "${C4}    ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝      ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ${RST}"
   echo ""
-  echo "Fetching PR data..."
+  # Crab judge with scales
+  echo -e "                                      ${C2}\\___/${RST}"
+  echo -e "                                     ${C2}( °_°)${RST}"
+  echo -e "                                    ${C3}/)" " "${C1}⚖️" " "${C3}(\\\\${RST}"
+  echo -e "                                   ${C4}<       >${RST}"
+  echo ""
+  echo -e "                              ${DIM}\"Order in the court!\"${RST}"
+  echo ""
+  echo -e "                  ${C2}┌─────────────┐${RST}           ${C3}┌─────────────┐${RST}"
+  echo -e "                  ${C2}│   Claude    │${RST}    vs     ${C3}│    Codex    │${RST}"
+  echo -e "                  ${C2}│  Reviewer A │${RST}           ${C3}│  Reviewer B │${RST}"
+  echo -e "                  ${C2}└─────────────┘${RST}           ${C3}└─────────────┘${RST}"
+  echo ""
+  echo -e "  ${DIM}How this works:${RST}"
+  echo ""
+  echo -e "    ${C1}1.${RST} Empanel      ${DIM}Judge spawns two independent reviewers${RST}"
+  echo -e "    ${C2}2.${RST} Review       ${DIM}Both reviewers analyze the PR separately${RST}"
+  echo -e "    ${C3}3.${RST} Collect      ${DIM}Judge gathers findings from both${RST}"
+  echo -e "    ${C4}4.${RST} Verify       ${DIM}Judge traces each claim to actual code${RST}"
+  echo -e "    ${C1}5.${RST} Deliberate   ${DIM}Resolve disagreements, rule on each issue${RST}"
+  echo -e "    ${C2}6.${RST} Verdict      ${DIM}Final ruling with zero false positives${RST}"
+  echo ""
+  echo -e "  ${CYAN}Fetching PR data...${NC}"
   echo ""
 }
 
