@@ -7068,6 +7068,51 @@ session_delete() {
   fi
 }
 
+# Delete all sessions matching a prefix
+_delete_all_sessions() {
+  local prefix="${1:-}"
+  local sessions_dir=$(get_sessions_dir)
+
+  if [ ! -d "$sessions_dir" ]; then
+    echo "No sessions found."
+    return
+  fi
+
+  # Count matching sessions
+  local count=0
+  local sessions=()
+  for session_dir in "$sessions_dir"/*/; do
+    [ -d "$session_dir" ] || continue
+    local name=$(basename "$session_dir")
+    if [ -z "$prefix" ] || [[ "$name" == "$prefix"* ]]; then
+      sessions+=("$name")
+      ((count++))
+    fi
+  done
+
+  if [ $count -eq 0 ]; then
+    echo "No ${prefix:-}sessions found."
+    return
+  fi
+
+  echo "Found $count ${prefix}session(s):"
+  for name in "${sessions[@]}"; do
+    echo "  - $name"
+  done
+  echo ""
+
+  read -p "Delete all $count session(s)? [y/N] " confirm
+  if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    for name in "${sessions[@]}"; do
+      rm -rf "$sessions_dir/$name"
+      echo "  Deleted: $name"
+    done
+    success "Deleted $count session(s)"
+  else
+    echo "Cancelled."
+  fi
+}
+
 # Handle session commands
 handle_session_command() {
   local cmd="${1:-ls}"
@@ -7688,16 +7733,20 @@ handle_review_command() {
     "delete"|"rm")
       local name="${1:-}"
       if [ -z "$name" ]; then
-        error "Specify review to delete"
+        error "Specify review to delete (or 'all' to delete all)"
         return 1
       fi
-      if [[ ! "$name" == review-* ]]; then
-        local parsed=($(parse_pr_identifier "$name"))
-        local repo="${parsed[1]}"
-        local number="${parsed[2]}"
-        name="review-${repo:-pr}-$number"
+      if [ "$name" = "all" ]; then
+        _delete_all_sessions "review"
+      else
+        if [[ ! "$name" == review-* ]] && [[ ! "$name" == court-* ]]; then
+          local parsed=($(parse_pr_identifier "$name"))
+          local repo="${parsed[1]}"
+          local number="${parsed[2]}"
+          name="review-${repo:-pr}-$number"
+        fi
+        session_delete "$name"
       fi
-      session_delete "$name"
       ;;
     "show"|"view"|"output")
       local name="${1:-}"
@@ -7914,13 +7963,17 @@ handle_court_command() {
     "delete"|"rm")
       local name="${1:-}"
       if [ -z "$name" ]; then
-        error "Specify court session to delete"
+        error "Specify court session to delete (or 'all' to delete all)"
         return 1
       fi
-      if [[ ! "$name" == court-* ]]; then
-        name="court-$name"
+      if [ "$name" = "all" ]; then
+        _delete_all_sessions "court"
+      else
+        if [[ ! "$name" == court-* ]]; then
+          name="court-$name"
+        fi
+        session_delete "$name"
       fi
-      session_delete "$name"
       ;;
     *)
       # Assume it's a PR identifier
