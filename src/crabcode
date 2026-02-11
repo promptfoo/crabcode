@@ -1275,6 +1275,7 @@ interactive_workspace_menu() {
 # Open or create workspace
 open_workspace() {
   local num=$1
+  local initial_prompt="${2:-}"
   local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$num"
   local window_name="ws$num"
 
@@ -1320,10 +1321,21 @@ EOF
   local port_msg="Using port $env_api_port"
   [ "$need_override" = "true" ] && port_msg="Port $env_api_port in use → using $api_port"
 
+  # Append initial prompt to claude command if provided
+  if [ -n "$initial_prompt" ] && [[ "$claude_cmd" == *"claude"* ]]; then
+    local escaped_prompt
+    escaped_prompt=$(printf '%q' "$initial_prompt")
+    claude_cmd="$claude_cmd $escaped_prompt"
+  fi
+
   # Check if session exists
   if ! tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     # Create new session
-    echo -e "${CYAN}Starting $SESSION_NAME session with workspace $num...${NC}"
+    if [ -n "$initial_prompt" ]; then
+      echo -e "${CYAN}Starting $SESSION_NAME session with workspace $num (with ticket prompt)...${NC}"
+    else
+      echo -e "${CYAN}Starting $SESSION_NAME session with workspace $num...${NC}"
+    fi
     echo "  Directory: $dir"
     echo -e "  ${YELLOW}$port_msg${NC}"
 
@@ -1332,11 +1344,42 @@ EOF
   else
     # Session exists
     if tmux list-windows -t "$SESSION_NAME" -F "#{window_name}" 2>/dev/null | grep -q "^$window_name$"; then
-      echo -e "${CYAN}Switching to workspace $num...${NC}"
-      if [ -n "$TMUX" ]; then
-        tmux select-window -t "$SESSION_NAME:$window_name"
+      if [ -n "$initial_prompt" ]; then
+        # Ticket mode: restart the main pane with the new prompt
+        # Check if something is running in the main pane before killing it
+        local pane_indices=$(get_pane_indices)
+        local p_main=$(echo "$pane_indices" | cut -d: -f2)
+        local p_server=$(echo "$pane_indices" | cut -d: -f3)
+
+        local current_cmd
+        current_cmd=$(tmux display-message -t "$SESSION_NAME:$window_name.$p_main" -p '#{pane_current_command}' 2>/dev/null || echo "")
+        if [[ -n "$current_cmd" && ! "$current_cmd" =~ ^(bash|zsh|sh|fish)$ ]]; then
+          echo -e "${YELLOW}Warning: Workspace $num main pane is running: $current_cmd${NC}"
+          read -p "Kill it and restart with ticket prompt? [y/N]: " confirm
+          if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "Aborted."
+            return 0
+          fi
+        fi
+
+        echo "  Window exists, restarting with ticket prompt..."
+
+        tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" C-c
+        sleep 0.3
+        [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "$dev_cmd" C-m
+
+        tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
+        sleep 0.5
+        [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "clear && $claude_cmd" C-m
+
+        success "Workspace $num started with ticket prompt"
       else
-        tmux attach -t "$SESSION_NAME" \; select-window -t "$window_name"
+        echo -e "${CYAN}Switching to workspace $num...${NC}"
+        if [ -n "$TMUX" ]; then
+          tmux select-window -t "$SESSION_NAME:$window_name"
+        else
+          tmux attach -t "$SESSION_NAME" \; select-window -t "$window_name"
+        fi
       fi
     else
       echo -e "${CYAN}Adding workspace $num to session...${NC}"
@@ -1885,6 +1928,20 @@ find_next_workspace() {
       return
     fi
   done
+}
+
+# Build a prompt for Claude to handle a Linear ticket
+build_ticket_prompt() {
+  local identifier="$1"
+  local default_prompt='Fetch the Linear ticket {identifier} using your Linear MCP tools. Read the ticket title, description, and any relevant comments. Then:
+1. Create and checkout a git branch using the ticket'\''s suggested branch name from Linear
+2. Analyze the requirements from the ticket
+3. Create an implementation plan and enter plan mode for my approval before writing any code
+If you need clarification on the requirements, ask me before proceeding.'
+
+  local template
+  template=$(config_get "ticket.prompt_template" "$default_prompt")
+  echo "${template//\{identifier\}/$identifier}"
 }
 
 # Create a new workspace with the next available number
@@ -6264,6 +6321,14 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  TICKET COMMANDS (crab ticket ...)                                            ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab ticket ENG-123       Auto-create workspace for ticket                   ║
+║  crab ws 3 ticket ENG-123  Use workspace 3 for ticket                         ║
+║  crab @pf ticket ENG-123   Ticket for specific project                        ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  WIP COMMANDS (crab wip ...)                                                  ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab wip save              Save current changes (branch, commits, patches)   ║
@@ -6408,6 +6473,10 @@ show_help() {
   echo "  review ls         List review sessions"
   echo "  review resume     Resume a review"
   echo ""
+  echo "Ticket Commands:"
+  echo "  ticket <ID>       Create workspace for a Linear ticket"
+  echo "  ws <N> ticket <ID> Use specific workspace for ticket"
+  echo ""
   echo "WIP Commands:"
   echo "  wip save          Save current changes"
   echo "  wip ls            List all WIPs globally"
@@ -6483,12 +6552,25 @@ handle_ws_command() {
           "wip")
             handle_wip_for_workspace "$num" "${@:2}"
             ;;
+          "ticket"|"tkt")
+            local ticket_id="${2:-}"
+            if [ -z "$ticket_id" ]; then
+              error "Ticket identifier required: crab ws $num ticket <identifier>"
+              exit 1
+            fi
+            if ! [[ "$ticket_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+              error "Invalid ticket identifier: $ticket_id"
+              echo "Identifiers must be alphanumeric (dashes and underscores allowed)"
+              exit 1
+            fi
+            open_workspace "$num" "$(build_ticket_prompt "$ticket_id")"
+            ;;
           "")
             open_workspace "$num"
             ;;
           *)
             error "Unknown command: crab ws $num $1"
-            echo "Try: crab ws $num restart|cleanup|continue|wip"
+            echo "Try: crab ws $num restart|cleanup|continue|wip|ticket"
             exit 1
             ;;
         esac
@@ -6499,6 +6581,39 @@ handle_ws_command() {
       fi
       ;;
   esac
+}
+
+# Handle top-level ticket command
+handle_ticket_command() {
+  local identifier="${1:-}"
+
+  if [ -z "$identifier" ]; then
+    error "Ticket identifier required"
+    echo ""
+    echo "Usage: crab ticket <identifier>"
+    echo "       crab ws <N> ticket <identifier>"
+    echo ""
+    echo "Examples:"
+    echo "  crab ticket ENG-123"
+    echo "  crab ws 3 ticket ENG-123"
+    exit 1
+  fi
+
+  if ! [[ "$identifier" =~ ^[A-Za-z0-9_-]+$ ]]; then
+    error "Invalid ticket identifier: $identifier"
+    echo "Identifiers must be alphanumeric (dashes and underscores allowed)"
+    exit 1
+  fi
+
+  local num
+  num=$(find_next_workspace)
+  if [ -z "$num" ]; then
+    error "No available workspace slots (max 100)"
+    exit 1
+  fi
+
+  echo -e "${CYAN}Using next available workspace: $num${NC}"
+  open_workspace "$num" "$(build_ticket_prompt "$identifier")"
 }
 
 # Handle WIP commands for a specific workspace
@@ -8008,7 +8123,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review"|"court")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review"|"court"|"ticket"|"tkt")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -8078,6 +8193,12 @@ main() {
       # Court review - thorough multi-agent review
       load_config 2>/dev/null || true
       handle_court_command "${@:2}"
+      ;;
+    "ticket"|"tkt")
+      # Linear ticket workspace
+      load_config
+      validate_config
+      handle_ticket_command "${@:2}"
       ;;
     "projects"|"project"|"proj")
       show_projects "${@:2}"
