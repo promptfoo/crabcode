@@ -73,3 +73,12 @@ toolkit:
   # Configure msmtp: ~/.msmtprc
   # email:
   #   from: you@example.com
+
+# Ticket integration (optional - uses Linear MCP tools in Claude)
+# ticket:
+#   prompt_template: |
+#     Fetch the Linear ticket {identifier} using your Linear MCP tools.
+#     Read the ticket title, description, and any relevant comments. Then:
+#     1. Create and checkout a git branch using the ticket's suggested branch name
+#     2. Analyze the requirements from the ticket
+#     3. Begin implementing the changes described in the ticket
