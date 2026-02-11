@@ -130,6 +130,35 @@ else
 fi
 
 # =============================================================================
+# Ticket Command Tests
+# =============================================================================
+
+echo ""
+echo -e "${YELLOW}Ticket Command Tests${NC}"
+
+# Test: ticket with no args shows usage
+run_test "Ticket no args shows usage" "'$CRABCODE' ticket 2>&1 | grep -qE 'Usage.*crab ticket'"
+
+# Test: ticket with invalid identifier is rejected
+run_test "Ticket rejects semicolon" "'$CRABCODE' ticket 'foo;bar' 2>&1 | grep -q 'Invalid ticket identifier'"
+run_test "Ticket rejects spaces" "'$CRABCODE' ticket 'foo bar' 2>&1 | grep -q 'Invalid ticket identifier'"
+run_test "Ticket rejects shell chars" "'$CRABCODE' ticket 'ENG\$(whoami)' 2>&1 | grep -q 'Invalid ticket identifier'"
+run_test "Ticket rejects braces" "'$CRABCODE' ticket '{identifier}' 2>&1 | grep -q 'Invalid ticket identifier'"
+
+# Test: valid identifiers pass validation (will fail later at tmux/config, not at validation)
+run_test "Ticket accepts ENG-123" "'$CRABCODE' ticket ENG-123 2>&1 | grep -vq 'Invalid ticket identifier'"
+run_test "Ticket accepts PROJ_42" "'$CRABCODE' ticket PROJ_42 2>&1 | grep -vq 'Invalid ticket identifier'"
+
+# Test: ws N ticket validation
+if command -v yq &>/dev/null; then
+  run_test "ws ticket no id shows error" "'$CRABCODE' ws 1 ticket 2>&1 | grep -qE 'Ticket identifier required'"
+  run_test "ws ticket rejects bad id" "'$CRABCODE' ws 1 ticket 'bad!id' 2>&1 | grep -q 'Invalid ticket identifier'"
+  run_test "ws ticket accepts valid id" "'$CRABCODE' ws 1 ticket ENG-123 2>&1 | grep -vq 'Invalid ticket identifier'"
+else
+  echo -e "  ${YELLOW}Skipping ws ticket tests (yq not installed)${NC}"
+fi
+
+# =============================================================================
 # Integration Tests (require Docker or real setup)
 # =============================================================================
 
