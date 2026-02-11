@@ -1,5 +1,11 @@
 # Example: Minimal Configuration
 # Bare minimum config to get started
+#
+# Tip: Add command aliases in ~/.crabcode/config.yaml:
+#   aliases:
+#     cu: cleanup
+#     r: restart
+#     wn: ws new
 
 session_name: dev
 workspace_base: ~/Dev/my-project/workspaces

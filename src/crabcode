@@ -298,6 +298,25 @@ resolve_project_from_cwd() {
   return 1
 }
 
+# Resolve user-configured command aliases from global config
+# Expands alias to one or more words, prepending to remaining args
+resolve_command_aliases() {
+  local cmd="${1:-}"
+  [ -z "$cmd" ] && return 1
+
+  if [ ! -f "$GLOBAL_CONFIG" ]; then
+    return 1
+  fi
+
+  local resolved
+  resolved=$(cmd="$cmd" yq -r '.aliases.[strenv(cmd)] // ""' "$GLOBAL_CONFIG" 2>/dev/null)
+  if [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
+    echo "$resolved"
+    return 0
+  fi
+  return 1
+}
+
 # Check if we're in legacy single-project mode
 is_legacy_config() {
   # Legacy = config.yaml has main_repo AND projects/ dir is empty/missing
@@ -6383,6 +6402,17 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  COMMAND ALIASES (crab alias ...)                                            ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab alias              List all aliases                                     ║
+║  crab alias set cu cleanup          Set alias: cu → cleanup                  ║
+║  crab alias set wn "ws new"         Multi-word: wn → ws new                  ║
+║  crab alias rm cu        Remove an alias                                      ║
+║                                                                               ║
+║  Config: ~/.crabcode/config.yaml (aliases section)                           ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  MOBILE COMPANION (crab mobile ...)                                           ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  crab mobile setup     Setup push notifications (ntfy.sh)                     ║
@@ -6496,6 +6526,11 @@ show_help() {
   echo "  projects          List registered projects"
   echo "  default [alias]   Show/set default project"
   echo "  init              Register a new project (asks for alias)"
+  echo ""
+  echo "Alias Commands:"
+  echo "  alias             List all aliases"
+  echo "  alias set <name> <cmd>  Set a command alias"
+  echo "  alias rm <name>   Remove an alias"
   echo ""
   echo "Other Commands:"
   echo "  init              Setup config (auto-detects project type)"
@@ -8110,6 +8145,112 @@ handle_court_command() {
 }
 
 # =============================================================================
+# Alias Management
+# =============================================================================
+
+handle_alias_command() {
+  local subcmd="${1:-}"
+
+  case "$subcmd" in
+    "")
+      # List all aliases
+      if [ ! -f "$GLOBAL_CONFIG" ]; then
+        echo -e "${YELLOW}No aliases configured.${NC}"
+        echo ""
+        echo "Set one with: crab alias set <name> <command...>"
+        return
+      fi
+
+      local aliases
+      aliases=$(yq -r '.aliases // {} | to_entries[] | .key + " → " + (.value | tostring)' "$GLOBAL_CONFIG" 2>/dev/null)
+      if [ -z "$aliases" ]; then
+        echo -e "${YELLOW}No aliases configured.${NC}"
+        echo ""
+        echo "Set one with: crab alias set <name> <command...>"
+        return
+      fi
+
+      echo -e "${CYAN}Command Aliases${NC}"
+      echo ""
+      while IFS= read -r line; do
+        local name="${line%% →*}"
+        local value="${line#*→ }"
+        echo -e "  ${GREEN}$name${NC} → $value"
+      done <<< "$aliases"
+      echo ""
+      echo -e "${GRAY}Config: $GLOBAL_CONFIG${NC}"
+      ;;
+    "set"|"add")
+      local name="${2:-}"
+      if [ -z "$name" ]; then
+        error "Usage: crab alias set <name> <command...>"
+        exit 1
+      fi
+      # Validate alias name
+      if ! [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        error "Invalid alias name '$name'. Use only letters, numbers, hyphens, and underscores."
+        exit 1
+      fi
+
+      shift 2
+      local value="$*"
+      if [ -z "$value" ]; then
+        error "Usage: crab alias set <name> <command...>"
+        exit 1
+      fi
+
+      # Ensure global config exists
+      mkdir -p "$CONFIG_DIR"
+      if [ ! -f "$GLOBAL_CONFIG" ]; then
+        echo "{}" > "$GLOBAL_CONFIG"
+      fi
+
+      NAME="$name" VALUE="$value" yq -i '.aliases.[strenv(NAME)] = strenv(VALUE)' "$GLOBAL_CONFIG"
+      echo -e "${GREEN}Alias set:${NC} $name → $value"
+      ;;
+    "rm"|"remove"|"delete")
+      local name="${2:-}"
+      if [ -z "$name" ]; then
+        error "Usage: crab alias rm <name>"
+        exit 1
+      fi
+
+      if [ ! -f "$GLOBAL_CONFIG" ]; then
+        error "No aliases configured"
+        exit 1
+      fi
+
+      local existing
+      existing=$(NAME="$name" yq -r '.aliases.[strenv(NAME)] // ""' "$GLOBAL_CONFIG" 2>/dev/null)
+      if [ -z "$existing" ] || [ "$existing" = "null" ]; then
+        error "Alias '$name' not found"
+        exit 1
+      fi
+
+      NAME="$name" yq -i 'del(.aliases.[strenv(NAME)])' "$GLOBAL_CONFIG"
+
+      # Clean up empty aliases map
+      local remaining
+      remaining=$(yq -r '.aliases // {} | length' "$GLOBAL_CONFIG" 2>/dev/null)
+      if [ "$remaining" = "0" ]; then
+        yq -i 'del(.aliases)' "$GLOBAL_CONFIG"
+      fi
+
+      echo -e "${GREEN}Removed alias:${NC} $name"
+      ;;
+    *)
+      error "Unknown alias subcommand: $subcmd"
+      echo ""
+      echo "Usage:"
+      echo "  crab alias              List all aliases"
+      echo "  crab alias set <name> <command...>  Set an alias"
+      echo "  crab alias rm <name>    Remove an alias"
+      exit 1
+      ;;
+  esac
+}
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -8119,6 +8260,14 @@ main() {
   if [[ "${1:-}" == @* ]]; then
     resolve_project "$1"
     shift
+  fi
+
+  # Resolve user-configured command aliases (before project + command dispatch)
+  if resolved=$(resolve_command_aliases "${1:-}"); then
+    shift
+    # Split resolved alias into words without glob expansion
+    read -r -a resolved_parts <<<"$resolved"
+    set -- "${resolved_parts[@]}" "$@"
   fi
 
   # For project-aware commands, resolve project (cwd-first, then default)
@@ -8205,6 +8354,9 @@ main() {
       ;;
     "default")
       set_default_project "${2:-}"
+      ;;
+    "alias"|"aliases")
+      handle_alias_command "${@:2}"
       ;;
     "new"|"create")
       # Shorthand: crab new -> crab ws new
