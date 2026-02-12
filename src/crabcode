@@ -423,6 +423,12 @@ load_config() {
   API_PORT_BASE=$(config_get "ports.api_base" "3200")
   APP_PORT_BASE=$(config_get "ports.app_base" "3000")
 
+  # Override from env_sync.port_bases if available (new config format)
+  local _pb_api=$(yq -r '.env_sync.port_bases.api // ""' "$CONFIG_FILE" 2>/dev/null)
+  local _pb_app=$(yq -r '.env_sync.port_bases.app // ""' "$CONFIG_FILE" 2>/dev/null)
+  [ -n "$_pb_api" ] && [ "$_pb_api" != "null" ] && API_PORT_BASE="$_pb_api"
+  [ -n "$_pb_app" ] && [ "$_pb_app" != "null" ] && APP_PORT_BASE="$_pb_app"
+
   # Shared volume settings
   SHARED_VOLUME_PATH=$(expand_path "$(config_get "shared_volume.path" "$CONFIG_DIR/shared")")
   SHARED_VOLUME_LINK=$(config_get "shared_volume.link_as" ".local")
@@ -470,6 +476,32 @@ find_available_port() {
   echo "$port"
 }
 
+# Get base port for a port type from env_sync.port_bases config
+get_port_base() {
+  local port_type=$1
+  local val=$(yq -r ".env_sync.port_bases.${port_type} // \"\"" "$CONFIG_FILE" 2>/dev/null)
+  if [ -n "$val" ] && [ "$val" != "null" ]; then
+    echo "$val"
+    return
+  fi
+  # Backward compat: fall back to globals
+  case "$port_type" in
+    api) echo "${API_PORT_BASE:-3200}" ;;
+    app) echo "${APP_PORT_BASE:-3000}" ;;
+    *) echo "" ;;
+  esac
+}
+
+# Get all port type keys from env_sync.port_bases
+get_port_types() {
+  local types=$(yq -r '.env_sync.port_bases // {} | keys | .[]' "$CONFIG_FILE" 2>/dev/null)
+  if [ -n "$types" ]; then
+    echo "$types"
+  else
+    echo -e "api\napp"
+  fi
+}
+
 # Get workspace ports (api and app) for workspace N
 # Returns: api_port:app_port:need_override
 get_workspace_ports() {
@@ -480,8 +512,8 @@ get_workspace_ports() {
   local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
   [ "$port_spacing" = "null" ] && port_spacing=10
 
-  local default_api=$((API_PORT_BASE + (num * port_spacing)))
-  local default_app=$((APP_PORT_BASE + (num * port_spacing)))
+  local default_api=$(($(get_port_base "api") + (num * port_spacing)))
+  local default_app=$(($(get_port_base "app") + (num * port_spacing)))
 
   # Read from .env if env_sync is configured
   local env_api=$(read_env_port "$dir" "api")
@@ -504,28 +536,44 @@ get_workspace_ports() {
 # Read port from .env file based on env_sync config
 read_env_port() {
   local dir=$1
-  local port_type=$2  # "api" or "app"
+  local port_type=$2  # "api", "app", "admin", etc.
 
   local env_files_count=$(yq -r '.env_sync.files | length // 0' "$CONFIG_FILE" 2>/dev/null)
 
   for ((i=0; i<env_files_count; i++)); do
     local env_path=$(yq -r ".env_sync.files[$i].path" "$CONFIG_FILE" 2>/dev/null)
-    local port_var=$(yq -r ".env_sync.files[$i].port_var" "$CONFIG_FILE" 2>/dev/null)
-
     [ -z "$env_path" ] || [ "$env_path" = "null" ] && continue
 
     local full_path="$dir/$env_path"
-    if [ -f "$full_path" ] && [ -n "$port_var" ] && [ "$port_var" != "null" ]; then
-      local value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')
-      if [ -n "$value" ]; then
-        # If it's a URL, extract port
-        if [[ "$value" =~ :([0-9]+) ]]; then
-          echo "${BASH_REMATCH[1]}"
-          return
-        elif [[ "$value" =~ ^[0-9]+$ ]]; then
-          echo "$value"
-          return
-        fi
+    [ ! -f "$full_path" ] && continue
+
+    local ports_type=$(yq -r ".env_sync.files[$i].ports | type" "$CONFIG_FILE" 2>/dev/null)
+
+    local port_var=""
+    if [ "$ports_type" = "!!map" ]; then
+      # New format: find key whose value matches requested type
+      port_var=$(yq -r ".env_sync.files[$i].ports | to_entries | .[] | select(.value == \"$port_type\") | .key" "$CONFIG_FILE" 2>/dev/null)
+    elif [ "$ports_type" = "!!seq" ]; then
+      # Old format: positional — index 0=api, index 1=app
+      local port_idx
+      case "$port_type" in
+        api) port_idx=0 ;;
+        app) port_idx=1 ;;
+        *) continue ;;
+      esac
+      port_var=$(yq -r ".env_sync.files[$i].ports[$port_idx] // \"\"" "$CONFIG_FILE" 2>/dev/null)
+    fi
+
+    [ -z "$port_var" ] || [ "$port_var" = "null" ] && continue
+
+    local value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]')
+    if [ -n "$value" ]; then
+      if [[ "$value" =~ :([0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+      elif [[ "$value" =~ ^[0-9]+$ ]]; then
+        echo "$value"
+        return
       fi
     fi
   done
@@ -574,88 +622,142 @@ sync_env_files() {
       [ "$quiet" != "true" ] && echo -e "  ${YELLOW}Created $env_path from template${NC}"
     fi
 
+    # Create empty file if no template but has managed ports/refs
+    if [ ! -f "$full_path" ]; then
+      local has_ports=$(yq -r ".env_sync.files[$i].ports | type" "$CONFIG_FILE" 2>/dev/null)
+      local has_refs=$(yq -r ".env_sync.files[$i].refs | type" "$CONFIG_FILE" 2>/dev/null)
+      if [ "$has_ports" != "!!null" ] || [ "$has_refs" != "!!null" ]; then
+        mkdir -p "$(dirname "$full_path")"
+        touch "$full_path"
+        [ "$quiet" != "true" ] && echo -e "  ${YELLOW}Created empty $env_path${NC}"
+      fi
+    fi
+
     # Skip if file still doesn't exist
     [ ! -f "$full_path" ] && continue
 
-    # Get ports array (supports both old port_var and new ports[] format)
-    local ports_json=$(yq -r ".env_sync.files[$i].ports // []" "$CONFIG_FILE" 2>/dev/null)
-    local old_port_var=$(yq -r ".env_sync.files[$i].port_var // \"\"" "$CONFIG_FILE" 2>/dev/null)
+    # Get port spacing
+    local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
+    [ "$port_spacing" = "null" ] && port_spacing=10
 
-    # Handle old format (port_var: single var)
-    if [ -n "$old_port_var" ] && [ "$old_port_var" != "null" ]; then
-      ports_json="[\"$old_port_var\"]"
-    fi
+    # Detect ports format: !!map (new) or !!seq (old) or !!null (none)
+    local ports_type=$(yq -r ".env_sync.files[$i].ports | type" "$CONFIG_FILE" 2>/dev/null)
 
-    # Process each port var
-    local ports_count=$(echo "$ports_json" | yq -r 'length // 0' 2>/dev/null)
-    for ((p=0; p<ports_count; p++)); do
-      local port_var=$(echo "$ports_json" | yq -r ".[$p]" 2>/dev/null)
-      [ -z "$port_var" ] || [ "$port_var" = "null" ] && continue
+    if [ "$ports_type" = "!!map" ]; then
+      # NEW FORMAT: ports is a map {VAR_NAME: port_type}
+      # Base ports come from config, NOT from .env files — this prevents compounding
+      local port_entries=$(yq -r ".env_sync.files[$i].ports | to_entries | .[] | \"\(.key)=\(.value)\"" "$CONFIG_FILE" 2>/dev/null)
+      echo "$port_entries" | while IFS='=' read -r port_var port_type; do
+        [ -z "$port_var" ] || [ -z "$port_type" ] && continue
+        local base_port=$(get_port_base "$port_type")
+        [ -z "$base_port" ] && continue
 
-      # ALWAYS read base value from main repo to get consistent base port
-      # This prevents compounding port increments on repeated syncs
-      local base_value=""
-      local main_env="$MAIN_REPO/$env_path"
-      [ -f "$main_env" ] && base_value=$(grep "^${port_var}=" "$main_env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
+        local new_port=$((base_port + (workspace_num * port_spacing)))
 
-      # Fallback to workspace .env only if main repo doesn't have it
-      if [ -z "$base_value" ]; then
-        base_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
-      fi
+        # Store resolved port for refs lookup
+        echo "$port_var=$new_port" >> "$ports_file"
 
-      # Also read current workspace value for updating
-      local current_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
-      [ -z "$current_value" ] && current_value="$base_value"
+        # Read current value from .env
+        local current_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2-)
 
-      # Extract base port number from main repo value
-      local base_port=""
-      if echo "$base_value" | grep -qE '^[0-9]+$'; then
-        base_port="$base_value"
-      elif echo "$base_value" | grep -qE ':[0-9]+'; then
-        base_port=$(echo "$base_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
-      fi
+        if [ -z "$current_value" ]; then
+          # Var doesn't exist — append with appropriate format
+          local new_value
+          if [[ "$port_var" == *"_URL"* ]] || [[ "$port_var" == *"_HOST"* ]]; then
+            new_value="http://localhost:${new_port}"
+          else
+            new_value="$new_port"
+          fi
+          echo "${port_var}=${new_value}" >> "$full_path"
+          [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $port_var → $new_port (added)${NC}"
+        else
+          # Build new value preserving existing format (URL vs number)
+          local new_value
+          if echo "$current_value" | grep -qE '^[0-9]+$'; then
+            new_value="$new_port"
+          else
+            local current_port=$(echo "$current_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
+            if [ -n "$current_port" ]; then
+              new_value=$(echo "$current_value" | sed "s/:${current_port}/:${new_port}/g")
+            else
+              new_value="$current_value"
+            fi
+          fi
 
-      [ -z "$base_port" ] && continue
-
-      # Get port spacing (default 10 to allow multiple services per workspace)
-      local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
-      [ "$port_spacing" = "null" ] && port_spacing=10
-
-      # Calculate workspace port: base + (workspace_num * spacing)
-      # This ensures each workspace has a range of ports to avoid collisions
-      local new_port=$((base_port + (workspace_num * port_spacing)))
-
-      # Check if port is available, find next free if not
-      while lsof -i ":$new_port" &>/dev/null; do
-        new_port=$((new_port + 1))
-        # Safety limit - stay within this workspace's range
-        if [ $new_port -gt $((base_port + (workspace_num * port_spacing) + port_spacing - 1)) ]; then
-          new_port=$((base_port + (workspace_num * port_spacing)))
-          break
+          if [ "$current_value" != "$new_value" ]; then
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+              sed -i '' "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
+            else
+              sed -i "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
+            fi
+            [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $port_var → $new_port${NC}"
+          fi
         fi
       done
 
-      # Store resolved port for refs lookup
-      echo "$port_var=$new_port" >> "$ports_file"
+    elif [ "$ports_type" = "!!seq" ]; then
+      # OLD FORMAT: backward compat — ports is an array of var names
+      local old_port_var=$(yq -r ".env_sync.files[$i].port_var // \"\"" "$CONFIG_FILE" 2>/dev/null)
+      local ports_json=$(yq -r ".env_sync.files[$i].ports // []" "$CONFIG_FILE" 2>/dev/null)
 
-      # Update the .env file
-      local new_value
-      if echo "$current_value" | grep -qE '^[0-9]+$'; then
-        new_value="$new_port"
-      else
-        # Replace port in URL/string
-        new_value=$(echo "$current_value" | sed "s/:${base_port}/:${new_port}/g")
+      if [ -n "$old_port_var" ] && [ "$old_port_var" != "null" ]; then
+        ports_json="[\"$old_port_var\"]"
       fi
 
-      if [ "$current_value" != "$new_value" ]; then
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-          sed -i '' "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
-        else
-          sed -i "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
+      local ports_count=$(echo "$ports_json" | yq -r 'length // 0' 2>/dev/null)
+      for ((p=0; p<ports_count; p++)); do
+        local port_var=$(echo "$ports_json" | yq -r ".[$p]" 2>/dev/null)
+        [ -z "$port_var" ] || [ "$port_var" = "null" ] && continue
+
+        local base_value=""
+        local main_env="$MAIN_REPO/$env_path"
+        [ -f "$main_env" ] && base_value=$(grep "^${port_var}=" "$main_env" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
+
+        if [ -z "$base_value" ]; then
+          base_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
         fi
-        [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $port_var → $new_port${NC}"
-      fi
-    done
+
+        local current_value=$(grep "^${port_var}=" "$full_path" 2>/dev/null | cut -d= -f2- | tr -d '[:space:]"'"'")
+        [ -z "$current_value" ] && current_value="$base_value"
+
+        local base_port=""
+        if echo "$base_value" | grep -qE '^[0-9]+$'; then
+          base_port="$base_value"
+        elif echo "$base_value" | grep -qE ':[0-9]+'; then
+          base_port=$(echo "$base_value" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
+        fi
+
+        [ -z "$base_port" ] && continue
+
+        local new_port=$((base_port + (workspace_num * port_spacing)))
+
+        while lsof -i ":$new_port" &>/dev/null; do
+          new_port=$((new_port + 1))
+          if [ $new_port -gt $((base_port + (workspace_num * port_spacing) + port_spacing - 1)) ]; then
+            new_port=$((base_port + (workspace_num * port_spacing)))
+            break
+          fi
+        done
+
+        echo "$port_var=$new_port" >> "$ports_file"
+
+        local new_value
+        if echo "$current_value" | grep -qE '^[0-9]+$'; then
+          new_value="$new_port"
+        else
+          new_value=$(echo "$current_value" | sed "s/:${base_port}/:${new_port}/g")
+        fi
+
+        if [ "$current_value" != "$new_value" ]; then
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            sed -i '' "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
+          else
+            sed -i "s|^${port_var}=.*|${port_var}=$new_value|" "$full_path"
+          fi
+          [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $port_var → $new_port${NC}"
+        fi
+      done
+    fi
   done
 
   # Second pass: process refs (URL vars that reference managed ports)
@@ -693,7 +795,11 @@ sync_env_files() {
 
       if [ "$extract_port_only" = true ]; then
         # Set target to plain port number
-        if [ "$current_value" != "$resolved_port" ]; then
+        if [ -z "$current_value" ]; then
+          # Var doesn't exist — append plain port number
+          echo "${ref_var}=$resolved_port" >> "$full_path"
+          [ "$quiet" != "true" ] && echo -e "  ${GREEN}$env_path: $ref_var → $resolved_port (added)${NC}"
+        elif [ "$current_value" != "$resolved_port" ]; then
           if [[ "$OSTYPE" == "darwin"* ]]; then
             sed -i '' "s|^${ref_var}=.*|${ref_var}=$resolved_port|" "$full_path"
           else
@@ -729,73 +835,80 @@ show_ports() {
   load_config
   validate_config
 
+  local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
+  [ "$port_spacing" = "null" ] && port_spacing=10
+
+  # Get port types dynamically
+  local types=($(get_port_types))
+
   echo -e "${CYAN}Port Usage Across Workspaces${NC}"
   echo ""
-  printf "  %-20s %-8s %-8s %-20s\n" "WORKSPACE" "API" "APP" "STATUS"
-  echo "  ────────────────────────────────────────────────────────"
+
+  # Build header
+  local header="  %-20s"
+  for t in "${types[@]}"; do
+    header+=" %-8s"
+  done
+  header+=" %-20s\n"
+  printf "$header" "WORKSPACE" "${types[@]^^}" "STATUS"
+  local sep="  "
+  local sep_len=$((20 + ${#types[@]} * 9 + 20))
+  for ((s=0; s<sep_len; s++)); do sep+="─"; done
+  echo "$sep"
 
   for ((i=1; i<=WORKSPACE_COUNT; i++)); do
     local dir="$WORKSPACE_BASE/$WORKSPACE_PREFIX-$i"
-    if [ ! -d "$dir" ]; then
-      continue
-    fi
+    [ ! -d "$dir" ] && continue
 
-    local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
-    [ "$port_spacing" = "null" ] && port_spacing=10
-    local default_api=$((API_PORT_BASE + (i * port_spacing)))
-    local default_app=$((APP_PORT_BASE + (i * port_spacing)))
-    local api_port=$(read_env_port "$dir" "api")
-    local app_port=$(read_env_port "$dir" "app")
-    [ -z "$api_port" ] && api_port="$default_api"
-    [ -z "$app_port" ] && app_port="$default_app"
+    # Calculate ports for each type
+    local ports=()
+    local statuses=()
+    for t in "${types[@]}"; do
+      local base=$(get_port_base "$t")
+      local default_port=$((base + (i * port_spacing)))
+      local port=$(read_env_port "$dir" "$t")
+      [ -z "$port" ] && port="$default_port"
+      ports+=("$port")
 
-    # Check API port status
-    local api_status="free"
-    if lsof -i ":$api_port" &>/dev/null; then
-      local pid=$(lsof -t -i ":$api_port" 2>/dev/null | head -1)
-      local cwd=$(lsof -p "$pid" 2>/dev/null | grep cwd | awk '{print $NF}')
-      if [[ "$cwd" == *"$WORKSPACE_PREFIX-$i"* ]]; then
-        api_status="running"
-      elif [[ "$cwd" == *"$WORKSPACE_PREFIX-"* ]]; then
-        local other_ws=$(echo "$cwd" | grep -oE "${WORKSPACE_PREFIX}-[0-9]+" | sed "s/${WORKSPACE_PREFIX}-/ws/")
-        api_status="TAKEN:$other_ws"
-      else
-        api_status="in-use"
+      # Check port status
+      local status="free"
+      if lsof -i ":$port" &>/dev/null; then
+        local pid=$(lsof -t -i ":$port" 2>/dev/null | head -1)
+        local cwd=$(lsof -p "$pid" 2>/dev/null | grep cwd | awk '{print $NF}')
+        if [[ "$cwd" == *"$WORKSPACE_PREFIX-$i"* ]]; then
+          status="running"
+        elif [[ "$cwd" == *"$WORKSPACE_PREFIX-"* ]]; then
+          local other_ws=$(echo "$cwd" | grep -oE "${WORKSPACE_PREFIX}-[0-9]+" | sed "s/${WORKSPACE_PREFIX}-/ws/")
+          status="TAKEN:$other_ws"
+        else
+          status="in-use"
+        fi
       fi
-    fi
+      statuses+=("$status")
+    done
 
-    # Check APP port status
-    local app_status="free"
-    if lsof -i ":$app_port" &>/dev/null; then
-      local pid=$(lsof -t -i ":$app_port" 2>/dev/null | head -1)
-      local cwd=$(lsof -p "$pid" 2>/dev/null | grep cwd | awk '{print $NF}')
-      if [[ "$cwd" == *"$WORKSPACE_PREFIX-$i"* ]]; then
-        app_status="running"
-      elif [[ "$cwd" == *"$WORKSPACE_PREFIX-"* ]]; then
-        local other_ws=$(echo "$cwd" | grep -oE "${WORKSPACE_PREFIX}-[0-9]+" | sed "s/${WORKSPACE_PREFIX}-/ws/")
-        app_status="TAKEN:$other_ws"
-      else
-        app_status="in-use"
-      fi
-    fi
+    # Print port columns
+    printf "  %-20s" "$WORKSPACE_PREFIX-$i"
+    for p in "${ports[@]}"; do
+      printf " %-8s" "$p"
+    done
 
-    # Color code status
-    local api_display app_display
-    case "$api_status" in
-      "free") api_display="${YELLOW}free${NC}" ;;
-      "running") api_display="${GREEN}●${NC}" ;;
-      TAKEN:*) api_display="${RED}${api_status}${NC}" ;;
-      *) api_display="${YELLOW}busy${NC}" ;;
-    esac
-    case "$app_status" in
-      "free") app_display="${YELLOW}free${NC}" ;;
-      "running") app_display="${GREEN}●${NC}" ;;
-      TAKEN:*) app_display="${RED}${app_status}${NC}" ;;
-      *) app_display="${YELLOW}busy${NC}" ;;
-    esac
-
-    printf "  %-20s %-8s %-8s " "$WORKSPACE_PREFIX-$i" "$api_port" "$app_port"
-    echo -e "API: $api_display  APP: $app_display"
+    # Print status for each type
+    local status_str=""
+    for ((ti=0; ti<${#types[@]}; ti++)); do
+      local t_upper="${types[$ti]^^}"
+      local s="${statuses[$ti]}"
+      local display
+      case "$s" in
+        "free") display="${YELLOW}free${NC}" ;;
+        "running") display="${GREEN}●${NC}" ;;
+        TAKEN:*) display="${RED}${s}${NC}" ;;
+        *) display="${YELLOW}busy${NC}" ;;
+      esac
+      [ -n "$status_str" ] && status_str+="  "
+      status_str+="${t_upper}: $display"
+    done
+    echo -e " $status_str"
   done
   echo ""
   echo -e "  Legend: ${GREEN}●${NC}=running  ${YELLOW}free${NC}=available  ${RED}TAKEN:wsN${NC}=conflict"
@@ -1157,7 +1270,7 @@ list_workspaces() {
       local branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "unknown")
       local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
       [ "$port_spacing" = "null" ] && port_spacing=10
-      local api_port=$((API_PORT_BASE + (i * port_spacing)))
+      local api_port=$(($(get_port_base "api") + (i * port_spacing)))
       local env_port=$(read_env_port "$dir" "api")
       [ -n "$env_port" ] && api_port="$env_port"
 
@@ -1230,7 +1343,7 @@ interactive_workspace_menu() {
       local branch=$(cd "$dir" && git branch --show-current 2>/dev/null || echo "unknown")
       local port_spacing=$(yq -r '.env_sync.port_spacing // 10' "$CONFIG_FILE" 2>/dev/null)
       [ "$port_spacing" = "null" ] && port_spacing=10
-      local api_port=$((API_PORT_BASE + (i * port_spacing)))
+      local api_port=$(($(get_port_base "api") + (i * port_spacing)))
       local env_port=$(read_env_port "$dir" "api")
       [ -n "$env_port" ] && api_port="$env_port"
 
@@ -3957,10 +4070,17 @@ submodules:
 
 env_sync:
   port_spacing: 10
+  port_bases:
+    api: 3200
+    app: 3000
+    admin: 3100
   files:
     - path: server/.env
       copy_from: server/.env.example
-      ports: [API_URL, APP_URL]
+      ports:
+        API_URL: api
+        APP_URL: app
+        ADMIN_APP_URL: admin
       refs:
         API_PORT: API_URL:port
     - path: app/.env
@@ -3969,9 +4089,10 @@ env_sync:
         VITE_API_BASE_URL: API_URL
         PORT: APP_URL:port
     - path: admin-app/.env
-      copy_from: admin-app/.env.example
+      ports:
+        PORT: admin
       refs:
-        VITE_API_BASE_URL: API_URL
+        API_PORT: API_URL:port
     - path: promptfoo/.env
       refs:
         PROMPTFOO_REMOTE_GENERATION_URL: API_URL
