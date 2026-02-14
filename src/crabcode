@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.8.0"
+VERSION="0.9.0"
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -5441,6 +5441,525 @@ handle_mobile_command() {
 }
 
 # =============================================================================
+# P2P Messaging - Self-hosted relay for direct messaging with coworkers
+# =============================================================================
+
+MSG_CONFIG_FILE="$CONFIG_DIR/msg.json"
+MSG_RELAY_DIR="$CONFIG_DIR/msg-relay"
+MSG_LOG_DIR="$CONFIG_DIR/messages"
+MSG_PID_FILE="/tmp/crab-msg-relay.pid"
+MSG_TUNNEL_PID_FILE="/tmp/crab-msg-tunnel.pid"
+MSG_PORT=9119
+
+# Read a field from msg config
+msg_get() {
+  local field="$1"
+  [ -f "$MSG_CONFIG_FILE" ] && jq -r ".$field // \"\"" "$MSG_CONFIG_FILE" 2>/dev/null || echo ""
+}
+
+# Write a field to msg config
+msg_set() {
+  local field="$1"
+  local value="$2"
+  if [ ! -f "$MSG_CONFIG_FILE" ]; then
+    echo '{}' > "$MSG_CONFIG_FILE"
+  fi
+  local tmp="${MSG_CONFIG_FILE}.tmp"
+  jq --arg v "$value" ".$field = \$v" "$MSG_CONFIG_FILE" > "$tmp" && mv "$tmp" "$MSG_CONFIG_FILE"
+}
+
+# Append to local message log
+msg_log() {
+  local direction="$1"  # > or <
+  local contact="$2"
+  local message="$3"
+  mkdir -p "$MSG_LOG_DIR"
+  echo "[$(date '+%Y-%m-%d %H:%M')] $direction @$contact: $message" >> "$MSG_LOG_DIR/log"
+}
+
+# Start the relay server (Python3 HTTP)
+msg_relay_start() {
+  local expose="${1:-}"
+
+  if ! command_exists python3; then
+    error "Python3 is required for the relay server"
+    return 1
+  fi
+
+  # Check if already running
+  if [ -f "$MSG_PID_FILE" ] && kill -0 "$(cat "$MSG_PID_FILE")" 2>/dev/null; then
+    echo -e "${YELLOW}Relay already running (PID $(cat "$MSG_PID_FILE"))${NC}"
+    msg_relay_info
+    return 0
+  fi
+
+  # Get or set host name
+  local name=$(msg_get "name")
+  if [ -z "$name" ]; then
+    local default_name=$(git config user.name 2>/dev/null || whoami)
+    echo -ne "Your display name [${default_name}]: "
+    read -r input_name
+    name="${input_name:-$default_name}"
+    msg_set "name" "$name"
+  fi
+  msg_set "role" "host"
+
+  # Create relay data dir
+  mkdir -p "$MSG_RELAY_DIR"
+
+  # Write the Python relay server
+  local server_script="/tmp/crab-msg-relay.py"
+  cat > "$server_script" << 'PYEOF'
+import os, sys, json, time, urllib.parse
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+DATA_DIR = os.path.expanduser("~/.crabcode/msg-relay")
+HOST_NAME = sys.argv[2] if len(sys.argv) > 2 else "unknown"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == "/send":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            to_name = body.get("to", "")
+            from_name = body.get("from", "")
+            text = body.get("text", "")
+            if not to_name or not from_name or not text:
+                self._respond(400, {"error": "missing fields"})
+                return
+            inbox = os.path.join(DATA_DIR, f"{to_name}.jsonl")
+            with open(inbox, "a") as f:
+                f.write(json.dumps({"from": from_name, "text": text, "ts": time.time()}) + "\n")
+            self._respond(200, {"ok": True})
+        else:
+            self._respond(404, {"error": "not found"})
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        params = dict(urllib.parse.parse_qsl(parsed.query))
+
+        if path.startswith("/read/"):
+            name = path[6:]
+            since = float(params.get("since", 0))
+            inbox = os.path.join(DATA_DIR, f"{name}.jsonl")
+            msgs = []
+            if os.path.exists(inbox):
+                with open(inbox) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        msg = json.loads(line)
+                        if msg.get("ts", 0) > since:
+                            msgs.append(msg)
+            self._respond(200, msgs)
+        elif path == "/info":
+            self._respond(200, {"host": HOST_NAME})
+        elif path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(b"ok")
+        else:
+            self._respond(404, {"error": "not found"})
+
+    def _respond(self, code, data):
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def log_message(self, format, *args):
+        pass  # suppress request logs
+
+port = int(sys.argv[1]) if len(sys.argv) > 1 else 9119
+HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+PYEOF
+
+  # Start relay in background
+  python3 "$server_script" "$MSG_PORT" "$name" &
+  local relay_pid=$!
+  echo "$relay_pid" > "$MSG_PID_FILE"
+
+  sleep 0.5
+  if ! kill -0 "$relay_pid" 2>/dev/null; then
+    error "Relay failed to start"
+    rm -f "$MSG_PID_FILE"
+    return 1
+  fi
+
+  local local_ip=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')
+  local local_hostname=$(hostname 2>/dev/null || echo 'localhost')
+
+  msg_set "relay" "http://localhost:$MSG_PORT"
+
+  echo -e "${CYAN}━━ Relay Started ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "  ${GREEN}Relay running on port $MSG_PORT (PID $relay_pid)${NC}"
+  echo ""
+  echo -e "  ${BOLD}Same network:${NC}"
+  echo -e "    crab msg join http://${local_hostname}.local:$MSG_PORT"
+  echo -e "    crab msg join http://${local_ip}:$MSG_PORT"
+  echo ""
+
+  # Expose via cloudflared if requested
+  if [ "$expose" = "--expose" ]; then
+    msg_relay_expose
+  else
+    echo -e "  ${BOLD}Remote access:${NC}"
+    echo "    crab msg start --expose"
+    echo "    (requires: brew install cloudflared)"
+    echo ""
+  fi
+}
+
+# Expose relay via cloudflared tunnel
+msg_relay_expose() {
+  if ! command_exists cloudflared; then
+    error "cloudflared not installed. Run: brew install cloudflared"
+    return 1
+  fi
+
+  # Kill existing tunnel
+  if [ -f "$MSG_TUNNEL_PID_FILE" ] && kill -0 "$(cat "$MSG_TUNNEL_PID_FILE")" 2>/dev/null; then
+    kill "$(cat "$MSG_TUNNEL_PID_FILE")" 2>/dev/null
+  fi
+
+  # Start cloudflared in background, capture URL
+  local tunnel_log="/tmp/crab-msg-tunnel.log"
+  cloudflared tunnel --url "http://localhost:$MSG_PORT" > "$tunnel_log" 2>&1 &
+  local tunnel_pid=$!
+  echo "$tunnel_pid" > "$MSG_TUNNEL_PID_FILE"
+
+  echo -e "  ${BOLD}Starting tunnel...${NC}"
+
+  # Wait for the tunnel URL to appear (up to 10 seconds)
+  local tunnel_url=""
+  for i in $(seq 1 20); do
+    sleep 0.5
+    tunnel_url=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$tunnel_log" 2>/dev/null | head -1)
+    if [ -n "$tunnel_url" ]; then
+      break
+    fi
+  done
+
+  if [ -z "$tunnel_url" ]; then
+    warn "Could not detect tunnel URL. Check $tunnel_log"
+    return 1
+  fi
+
+  msg_set "relay" "$tunnel_url"
+
+  echo ""
+  echo -e "  ${GREEN}Tunnel active!${NC}"
+  echo -e "  ${BOLD}Public URL:${NC} $tunnel_url"
+  echo ""
+  echo -e "  ${BOLD}Share with your coworker:${NC}"
+  echo -e "    ${CYAN}crab msg join $tunnel_url${NC}"
+  echo ""
+}
+
+# Show relay status and connection info
+msg_relay_info() {
+  local name=$(msg_get "name")
+  local relay=$(msg_get "relay")
+  local role=$(msg_get "role")
+
+  echo -e "${CYAN}━━ Message Status ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo -e "  ${BOLD}Name:${NC}  $name"
+  echo -e "  ${BOLD}Role:${NC}  $role"
+  echo -e "  ${BOLD}Relay:${NC} $relay"
+
+  if [ -f "$MSG_PID_FILE" ] && kill -0 "$(cat "$MSG_PID_FILE")" 2>/dev/null; then
+    echo -e "  ${BOLD}Relay:${NC} ${GREEN}running${NC} (PID $(cat "$MSG_PID_FILE"))"
+  fi
+  if [ -f "$MSG_TUNNEL_PID_FILE" ] && kill -0 "$(cat "$MSG_TUNNEL_PID_FILE")" 2>/dev/null; then
+    echo -e "  ${BOLD}Tunnel:${NC} ${GREEN}running${NC} (PID $(cat "$MSG_TUNNEL_PID_FILE"))"
+  fi
+  echo ""
+}
+
+# Stop the relay and tunnel
+msg_relay_stop() {
+  local stopped=false
+
+  if [ -f "$MSG_PID_FILE" ]; then
+    local pid=$(cat "$MSG_PID_FILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null
+      stopped=true
+    fi
+    rm -f "$MSG_PID_FILE"
+  fi
+
+  if [ -f "$MSG_TUNNEL_PID_FILE" ]; then
+    local pid=$(cat "$MSG_TUNNEL_PID_FILE")
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null
+      stopped=true
+    fi
+    rm -f "$MSG_TUNNEL_PID_FILE"
+  fi
+
+  if [ "$stopped" = true ]; then
+    success "Relay stopped"
+  else
+    echo "No relay running"
+  fi
+}
+
+# Join a relay (coworker runs this)
+msg_join() {
+  local relay_url="${1:-}"
+
+  if [ -z "$relay_url" ]; then
+    error "Usage: crab msg join <relay-url>"
+    return 1
+  fi
+
+  # Strip trailing slash
+  relay_url="${relay_url%/}"
+
+  # Query relay for host info
+  local info
+  info=$(curl -s --connect-timeout 5 "${relay_url}/info" 2>/dev/null)
+  if [ -z "$info" ]; then
+    error "Cannot reach relay at $relay_url"
+    return 1
+  fi
+
+  local host_name=$(echo "$info" | jq -r '.host // "unknown"')
+
+  # Get coworker's name
+  local current_name=$(msg_get "name")
+  local default_name="${current_name:-$(git config user.name 2>/dev/null || whoami)}"
+  echo -ne "Your name [${default_name}]: "
+  read -r input_name
+  local name="${input_name:-$default_name}"
+
+  msg_set "name" "$name"
+  msg_set "relay" "$relay_url"
+  msg_set "role" "client"
+  mkdir -p "$MSG_LOG_DIR"
+
+  echo ""
+  success "Connected to ${host_name}'s relay!"
+  echo ""
+  echo -e "  Send a message:"
+  echo -e "    ${CYAN}crab msg @${host_name} \"hello\"${NC}"
+  echo ""
+  echo -e "  Check inbox:"
+  echo -e "    ${CYAN}crab msg read${NC}"
+  echo ""
+}
+
+# Send a message
+msg_send() {
+  local target="${1#@}"
+  shift
+  local message="$*"
+
+  if [ -z "$target" ] || [ -z "$message" ]; then
+    error "Usage: crab msg @name \"message\""
+    return 1
+  fi
+
+  local relay=$(msg_get "relay")
+  local sender=$(msg_get "name")
+
+  if [ -z "$relay" ] || [ -z "$sender" ]; then
+    error "Not configured. Run: crab msg start (host) or crab msg join <url> (client)"
+    return 1
+  fi
+
+  local response
+  response=$(curl -s --connect-timeout 5 -X POST \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n --arg to "$target" --arg from "$sender" --arg text "$message" \
+      '{to: $to, from: $from, text: $text}')" \
+    "${relay}/send" 2>/dev/null)
+
+  if echo "$response" | jq -e '.ok' > /dev/null 2>&1; then
+    msg_log ">" "$target" "$message"
+    success "Sent to @${target}"
+  else
+    error "Failed to send (relay: ${relay})"
+    return 1
+  fi
+}
+
+# Read inbox
+msg_read() {
+  local since="${1:-0}"
+
+  local relay=$(msg_get "relay")
+  local name=$(msg_get "name")
+
+  if [ -z "$relay" ] || [ -z "$name" ]; then
+    error "Not configured. Run: crab msg start (host) or crab msg join <url> (client)"
+    return 1
+  fi
+
+  # Calculate since timestamp (default: last 30 minutes)
+  local since_ts
+  if [ "$since" = "0" ]; then
+    since_ts=$(( $(date +%s) - 1800 ))
+  else
+    # Parse duration like 1h, 30m, 2d
+    local num="${since%[hmdHMD]}"
+    local unit="${since##*[0-9]}"
+    case "$unit" in
+      h|H) since_ts=$(( $(date +%s) - num * 3600 )) ;;
+      m|M) since_ts=$(( $(date +%s) - num * 60 )) ;;
+      d|D) since_ts=$(( $(date +%s) - num * 86400 )) ;;
+      *)   since_ts=$(( $(date +%s) - 1800 )) ;;
+    esac
+  fi
+
+  echo -e "${CYAN}━━ Inbox ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+
+  local response
+  response=$(curl -s --connect-timeout 5 "${relay}/read/${name}?since=${since_ts}" 2>/dev/null)
+
+  if [ -z "$response" ] || [ "$response" = "[]" ]; then
+    echo "  No new messages"
+    echo ""
+    return
+  fi
+
+  echo "$response" | jq -r '.[] | "\(.ts)|\(.from)|\(.text)"' 2>/dev/null | while IFS='|' read -r ts from text; do
+    local time_str=$(date -r "${ts%.*}" '+%H:%M' 2>/dev/null || echo "??:??")
+    echo -e "  ${GRAY}[${time_str}]${NC} ${CYAN}@${from}${NC}: ${text}"
+    msg_log "<" "$from" "$text"
+  done
+  echo ""
+}
+
+# Listen for messages in real-time (poll every 2 seconds)
+msg_listen() {
+  local relay=$(msg_get "relay")
+  local name=$(msg_get "name")
+
+  if [ -z "$relay" ] || [ -z "$name" ]; then
+    error "Not configured. Run: crab msg start (host) or crab msg join <url> (client)"
+    return 1
+  fi
+
+  echo -e "${CYAN}━━ Listening for messages (Ctrl+C to stop) ━━━━━━━${NC}"
+  echo ""
+
+  local last_ts=$(date +%s)
+
+  while true; do
+    local response
+    response=$(curl -s --connect-timeout 5 "${relay}/read/${name}?since=${last_ts}" 2>/dev/null)
+
+    if [ -n "$response" ] && [ "$response" != "[]" ]; then
+      echo "$response" | jq -r '.[] | "\(.ts)|\(.from)|\(.text)"' 2>/dev/null | while IFS='|' read -r ts from text; do
+        local time_str=$(date -r "${ts%.*}" '+%H:%M' 2>/dev/null || echo "??:??")
+        echo -e "  ${GRAY}[${time_str}]${NC} ${CYAN}@${from}${NC}: ${text}"
+        msg_log "<" "$from" "$text"
+      done
+      # Update last_ts to the latest message timestamp
+      local new_ts
+      new_ts=$(echo "$response" | jq -r '.[-1].ts // 0' 2>/dev/null)
+      if [ -n "$new_ts" ] && [ "$new_ts" != "0" ]; then
+        last_ts="${new_ts%.*}"
+      fi
+    fi
+
+    sleep 2
+  done
+}
+
+# View local message history
+msg_history() {
+  local count="${1:-20}"
+  local log_file="$MSG_LOG_DIR/log"
+
+  if [ ! -f "$log_file" ]; then
+    echo "No message history yet."
+    return
+  fi
+
+  echo -e "${CYAN}━━ History ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  tail -n "$count" "$log_file" | while IFS= read -r line; do
+    echo -e "  ${GRAY}$line${NC}"
+  done
+  echo ""
+}
+
+# Help text
+show_msg_help() {
+  echo -e "${CYAN}P2P Messaging Commands${NC}"
+  echo ""
+  echo "Host (run relay on your machine):"
+  echo "  crab msg start                  Start relay server"
+  echo "  crab msg start --expose         Start relay + cloudflared tunnel"
+  echo "  crab msg stop                   Stop relay and tunnel"
+  echo "  crab msg status                 Show relay status"
+  echo ""
+  echo "Client (connect to a relay):"
+  echo "  crab msg join <url>             Connect to a coworker's relay"
+  echo ""
+  echo "Messaging:"
+  echo "  crab msg @name \"message\"        Send a message"
+  echo "  crab msg read                   Check inbox (last 30m)"
+  echo "  crab msg read 2h                Check inbox (last 2 hours)"
+  echo "  crab msg listen                 Live stream (Ctrl+C to stop)"
+  echo "  crab msg history                View local message log"
+  echo ""
+}
+
+# Main dispatcher
+handle_msg_command() {
+  local first="${1:-}"
+
+  case "$first" in
+    "start")
+      msg_relay_start "${2:-}"
+      ;;
+    "stop")
+      msg_relay_stop
+      ;;
+    "join"|"connect")
+      msg_join "${2:-}"
+      ;;
+    "read"|"inbox")
+      msg_read "${2:-0}"
+      ;;
+    "listen"|"watch")
+      msg_listen
+      ;;
+    "history"|"log")
+      msg_history "${2:-20}"
+      ;;
+    "status"|"info")
+      msg_relay_info
+      ;;
+    "help"|"-h"|"--help"|"")
+      show_msg_help
+      ;;
+    "@"*)
+      msg_send "$@"
+      ;;
+    *)
+      error "Unknown msg command: $first"
+      echo ""
+      show_msg_help
+      return 1
+      ;;
+  esac
+}
+
+# =============================================================================
 # Workspace Handoff - Package and transfer entire context to teammate
 # =============================================================================
 
@@ -6540,6 +7059,19 @@ show_cheat() {
 ║  crab mobile serve     Start mobile dashboard on port 8888                    ║
 ║  crab mobile notify "Title" "Message"   Send push notification                ║
 ║  crab notify "Title" "Message"          Shorthand for above                   ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║  P2P MESSAGING (crab msg ...)                                                ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab msg start              Start relay on your machine                     ║
+║  crab msg start --expose     Start relay + cloudflared tunnel                ║
+║  crab msg stop               Stop relay and tunnel                           ║
+║  crab msg join <url>         Connect to a coworker's relay                   ║
+║  crab msg @name "message"    Send a message                                  ║
+║  crab msg read               Check inbox (last 30m)                          ║
+║  crab msg listen             Live message stream                             ║
+║  crab msg history            View local message log                          ║
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
@@ -8393,7 +8925,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review"|"court"|"ticket"|"tkt")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"msg"|"message"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review"|"court"|"ticket"|"tkt")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -8692,6 +9224,9 @@ main() {
       ;;
     "mobile")
       handle_mobile_command "${@:2}"
+      ;;
+    "msg"|"message")
+      handle_msg_command "${@:2}"
       ;;
     "handoff")
       handle_handoff_command "${@:2}"
