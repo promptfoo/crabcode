@@ -5468,6 +5468,17 @@ msg_set() {
   jq --arg v "$value" ".$field = \$v" "$MSG_CONFIG_FILE" > "$tmp" && mv "$tmp" "$MSG_CONFIG_FILE"
 }
 
+# Speak a received message via macOS say (runs in background)
+msg_say() {
+  local from="$1"
+  local text="$2"
+  local say_enabled=$(msg_get "say")
+  # Default to enabled if not set
+  if [ "$say_enabled" != "false" ] && command_exists say; then
+    say "$from said $text" &
+  fi
+}
+
 # Append to local message log
 msg_log() {
   local direction="$1"  # > or <
@@ -5837,6 +5848,7 @@ msg_read() {
     local time_str=$(date -r "${ts%.*}" '+%H:%M' 2>/dev/null || echo "??:??")
     echo -e "  ${GRAY}[${time_str}]${NC} ${CYAN}@${from}${NC}: ${text}"
     msg_log "<" "$from" "$text"
+    msg_say "$from" "$text"
   done
   echo ""
 }
@@ -5865,6 +5877,7 @@ msg_listen() {
         local time_str=$(date -r "${ts%.*}" '+%H:%M' 2>/dev/null || echo "??:??")
         echo -e "  ${GRAY}[${time_str}]${NC} ${CYAN}@${from}${NC}: ${text}"
         msg_log "<" "$from" "$text"
+        msg_say "$from" "$text"
       done
       # Update last_ts to the latest message timestamp
       local new_ts
@@ -5915,6 +5928,7 @@ show_msg_help() {
   echo "  crab msg read 2h                Check inbox (last 2 hours)"
   echo "  crab msg listen                 Live stream (Ctrl+C to stop)"
   echo "  crab msg history                View local message log"
+  echo "  crab msg say on/off             Toggle text-to-speech (default: on)"
   echo ""
 }
 
@@ -5940,6 +5954,22 @@ handle_msg_command() {
       ;;
     "history"|"log")
       msg_history "${2:-20}"
+      ;;
+    "say")
+      local toggle="${2:-}"
+      case "$toggle" in
+        "on")  msg_set "say" "true"; success "Text-to-speech enabled" ;;
+        "off") msg_set "say" "false"; success "Text-to-speech disabled" ;;
+        *)
+          local current=$(msg_get "say")
+          if [ "$current" = "false" ]; then
+            echo "Text-to-speech: off"
+          else
+            echo "Text-to-speech: on (default)"
+          fi
+          echo "  crab msg say on/off"
+          ;;
+      esac
       ;;
     "status"|"info")
       msg_relay_info
