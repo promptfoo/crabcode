@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Self-update**: bypass GitHub raw CDN cache so `crab update` always fetches the latest version
+- **Messaging**: preserve float precision in listen polling timestamp to prevent missed messages
+
+## [0.9.1] - 2026-02-13
+
+### Added
+
+- **P2P Messaging**: peer-to-peer messaging with self-hosted relay server
+  - `crab msg send @user "message"` — send a message to a teammate
+  - `crab msg listen` — listen for incoming messages
+  - Self-hosted relay via `crab msg relay` (no third-party dependencies)
+- **Text-to-speech**: received messages are spoken aloud using system TTS
+- **Command aliases**: user-configurable command alias system
+  - Define custom aliases in `~/.crabcode/aliases.yaml`
+  - `crab alias add <name> <command>` — create aliases for frequently used commands
+- **Linear tickets**: `crab ticket <ID>` opens a workspace from a Linear ticket
+  - Auto-creates branch, sets up workspace, and links to ticket
+
+### Fixed
+
+- **env_sync**: use config `port_bases` instead of `.env` extraction to prevent compounding port offsets
+
 ## [0.8.0] - 2026-02-09
 
 ### Added
@@ -79,9 +105,28 @@
 - `crab restart` from a workspace dir now correctly detects the owning project
 - Legacy config migration no longer clobbers global config on subsequent `crab init`
 
+## [0.4.1] - 2026-02-02
+
+### Added
+
+- **Promptfoo plugin**: target discovery agent for automated LLM evaluation
+  - `crab pf` commands for running promptfoo against workspace targets
+  - Auto-detects dependencies and creates provider configs
+- **CrabQL**: announcement banner and product section on landing page
+- `crab destroy` command for tearing down workspaces and cleaning up worktrees
+- `install_env` config option for injecting environment variables during workspace setup
+- ASCII crab mascot throughout CLI output
+
+### Fixed
+
+- Speed up submodule init by copying from main repo instead of network fetch
+- Copy `.mcp.json` instead of updating `settings.json` for MCP sync
+- Promptfoo plugin: class-based providers, path handling, install from main branch
+
 ## [0.4.0] - 2026-01-18
 
 ### Added
+
 - Template system for project-type-aware setup (`crab init -t promptfoo-cloud`)
 - Auto-detection of project type from repo contents
 - `crab init --list-templates` to show available templates
