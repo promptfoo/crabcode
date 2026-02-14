@@ -9308,9 +9308,16 @@ main() {
       local install_dir=$(dirname "$(realpath "$0")")
       local tmp_file="/tmp/crabcode-update-$$"
 
-      if curl -fsSL "https://raw.githubusercontent.com/promptfoo/crabcode/main/src/crabcode" -o "$tmp_file" 2>/dev/null; then
-        local new_version=$(grep '^VERSION=' "$tmp_file" | cut -d'"' -f2)
+      # Cache-bust to bypass GitHub raw CDN cache (max-age=300)
+      if curl -fsSL -H 'Cache-Control: no-cache' "https://raw.githubusercontent.com/promptfoo/crabcode/main/src/crabcode?t=$(date +%s)" -o "$tmp_file" 2>/dev/null; then
+        local new_version=$(grep '^VERSION=' "$tmp_file" | head -1 | cut -d'"' -f2)
         local current_version="$VERSION"
+
+        if [ -z "$new_version" ]; then
+          error "Downloaded file is invalid (no version found)"
+          rm -f "$tmp_file"
+          exit 1
+        fi
 
         if [ "$new_version" = "$current_version" ]; then
           echo -e "${GREEN}Already up to date (v$VERSION)${NC}"
