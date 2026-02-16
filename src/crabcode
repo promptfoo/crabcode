@@ -5879,11 +5879,12 @@ msg_listen() {
         msg_log "<" "$from" "$text"
         msg_say "$from" "$text"
       done
-      # Update last_ts to the latest message timestamp
+      # Update last_ts to the latest message timestamp (keep full float precision
+      # so the relay's strict > comparison excludes already-seen messages)
       local new_ts
       new_ts=$(echo "$response" | jq -r '.[-1].ts // 0' 2>/dev/null)
       if [ -n "$new_ts" ] && [ "$new_ts" != "0" ]; then
-        last_ts="${new_ts%.*}"
+        last_ts="$new_ts"
       fi
     fi
 
