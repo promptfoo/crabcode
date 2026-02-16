@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.9.1" # x-release-please-version
+VERSION="0.10.0" # x-release-please-version
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -1430,6 +1430,16 @@ open_workspace() {
   local dev_cmd=$(get_pane_command "server")
   local claude_cmd=$(get_pane_command "main")
 
+  # Check for WIP Claude session resume
+  local resume_file="$dir/.claude-resume-session"
+  if [ -f "$resume_file" ] && [[ "$claude_cmd" == *"claude"* ]]; then
+    local resume_id=$(cat "$resume_file")
+    if [ -n "$resume_id" ]; then
+      claude_cmd="$claude_cmd --resume $resume_id"
+      rm -f "$resume_file"
+    fi
+  fi
+
   # Always ensure team context exists in CLAUDE.md
   local team_file="$dir/.claude/CLAUDE.md"
   mkdir -p "$dir/.claude"
@@ -1922,8 +1932,17 @@ continue_workspace() {
   local dev_cmd=$(get_pane_command "server")
   local claude_cmd=$(get_pane_command "main")
 
-  # Add --continue to claude command if it contains "claude"
-  if [[ "$claude_cmd" == *"claude"* ]]; then
+  # Add session resume or --continue to claude command
+  local resume_file="$dir/.claude-resume-session"
+  if [ -f "$resume_file" ] && [[ "$claude_cmd" == *"claude"* ]]; then
+    local resume_id=$(cat "$resume_file")
+    if [ -n "$resume_id" ]; then
+      claude_cmd="$claude_cmd --resume $resume_id"
+      rm -f "$resume_file"
+    else
+      claude_cmd="$claude_cmd --continue"
+    fi
+  elif [[ "$claude_cmd" == *"claude"* ]]; then
     claude_cmd="$claude_cmd --continue"
   fi
 
@@ -2231,6 +2250,13 @@ wip_save() {
     fi
   done
 
+  # Capture Claude session ID for conversation resume
+  local claude_session=""
+  local claude_project_dir="$HOME/.claude/projects/$(echo "$dir" | tr '/.' '--')"
+  if [ -d "$claude_project_dir" ]; then
+    claude_session=$(ls -t "$claude_project_dir"/*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl 2>/dev/null || echo "")
+  fi
+
   cat > "$wip_path/metadata.json" << EOF
 {
   "timestamp": "$timestamp",
@@ -2239,6 +2265,7 @@ wip_save() {
   "workspace": $num,
   "branch": "$branch",
   "commits_ahead": $commits_ahead,
+  "claude_session": "$claude_session",
   "created_at": "$(date -Iseconds)"
 }
 EOF
@@ -2319,9 +2346,14 @@ wip_list() {
       local display_date=$(echo "$created" | cut -d'T' -f1)
       local display_time=$(echo "$created" | cut -d'T' -f2 | cut -d'+' -f1 | cut -d'-' -f1 | cut -c1-5)
 
+      # Check for Claude session
+      local claude_tag=""
+      local cs=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      [ -n "$cs" ] && claude_tag="  ${CYAN}Claude: saved${NC}"
+
       echo -e "  ${GREEN}[$i]${NC} $name"
       echo -e "      ${BLUE}$summary${NC}"
-      echo -e "      Branch: $branch | Created: $display_date $display_time"
+      echo -e "      Branch: $branch | Created: $display_date $display_time${claude_tag}"
       echo ""
     else
       echo -e "  ${GREEN}[$i]${NC} $name (no metadata)"
@@ -2411,7 +2443,12 @@ wip_list_global() {
 
       echo -e "  ${GREEN}[$i]${NC} ${BOLD}$wip_name${NC}"
       echo -e "      ${BLUE}$summary${NC}"
-      echo -e "      ${GRAY}Workspace: ${NC}$ws_num  ${GRAY}Branch: ${NC}$branch  ${GRAY}Files: ${NC}$file_count patches"
+      # Check for Claude session
+      local claude_tag=""
+      local claude_session=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      [ -n "$claude_session" ] && claude_tag="  ${CYAN}Claude: saved${NC}"
+
+      echo -e "      ${GRAY}Workspace: ${NC}$ws_num  ${GRAY}Branch: ${NC}$branch  ${GRAY}Files: ${NC}$file_count patches${claude_tag}"
       if [ -n "$commits_ahead" ] && [ "$commits_ahead" != "0" ]; then
         echo -e "      ${GRAY}Commits ahead: ${NC}$commits_ahead  ${GRAY}Created: ${NC}$display_date $display_time"
       else
@@ -2564,13 +2601,13 @@ wip_restore_global() {
 _workspace_has_changes() {
   local dir="$1"
   [ ! -d "$dir" ] && return 1
-  cd "$dir"
   # Check for any changes (staged, unstaged, or untracked)
-  if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+  # Use git -C to avoid changing the caller's working directory
+  if ! git -C "$dir" diff --quiet 2>/dev/null || ! git -C "$dir" diff --cached --quiet 2>/dev/null; then
     return 0
   fi
   # Check for untracked files
-  if [ -n "$(git ls-files --others --exclude-standard 2>/dev/null)" ]; then
+  if [ -n "$(git -C "$dir" ls-files --others --exclude-standard 2>/dev/null)" ]; then
     return 0
   fi
   return 1
@@ -2896,17 +2933,27 @@ _restore_wip() {
 
   success "WIP restored: $wip_name"
 
-  # Check if user was already in the workspace when they started
-  if [[ "$original_dir" == "$dir"* ]]; then
-    # Already in workspace, no need to open it
-    :
-  elif [ "$open_after" = "true" ]; then
+  # Write Claude session resume file if available
+  if [ -f "$metadata" ]; then
+    local claude_session=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+    if [ -n "$claude_session" ] && [ "$claude_session" != "" ]; then
+      echo "$claude_session" > "$dir/.claude-resume-session"
+      echo -e "  ${BLUE}Claude conversation will resume automatically${NC}"
+    fi
+  fi
+
+  # Relaunch the workspace tmux window with Claude session resume
+  if [ "$open_after" = "true" ]; then
     echo ""
-    echo "  Opening workspace $num..."
-    open_workspace "$num"
+    echo "  Relaunching workspace $num..."
+    continue_workspace "$num"
   else
     echo ""
-    echo "  Run 'crab $num' to open the workspace"
+    if [ -f "$dir/.claude-resume-session" ]; then
+      echo -e "  Run ${BOLD}crab $num continue${NC} to launch with the saved Claude conversation"
+    else
+      echo -e "  Run 'crab $num' to open the workspace"
+    fi
   fi
 }
 
@@ -9164,11 +9211,11 @@ main() {
           fi
           ;;
         "restore")
-          # Restore by index with optional target workspace and --open flag
-          # Usage: crab wip restore [<N>] [--to <ws>] [--open]
+          # Restore by index with optional target workspace
+          # Usage: crab wip restore [<N>] [--to <ws>]
           local target_ws=""
           local index=""
-          local open_after="false"
+          local open_after="true"
           shift 2  # Remove "wip" and "restore"
 
           # Parse arguments
