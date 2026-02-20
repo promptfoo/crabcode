@@ -8448,7 +8448,12 @@ review_quick() {
       session_resume "$name"
       return
     fi
-    return 1
+    read -p "Start fresh? (deletes existing session) [Y/n] " fresh
+    if [[ "$fresh" =~ ^[Nn]$ ]]; then
+      return 1
+    fi
+    rm -rf "$sessions_dir/$name"
+    echo -e "${GREEN}Deleted existing session. Starting fresh...${NC}"
   fi
 
   # Fetch PR data
@@ -8567,7 +8572,12 @@ review_court() {
       session_resume "$name"
       return
     fi
-    return 1
+    read -p "Start fresh? (deletes existing session) [Y/n] " fresh
+    if [[ "$fresh" =~ ^[Nn]$ ]]; then
+      return 1
+    fi
+    rm -rf "$sessions_dir/$name"
+    echo -e "${GREEN}Deleted existing session. Starting fresh...${NC}"
   fi
 
   # Show the court intro while fetching
