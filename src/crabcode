@@ -8107,14 +8107,34 @@ Spawn two reviewer agents to analyze the PR independently:
 ```
 Use Task tool:
   subagent_type: "general-purpose"
-  prompt: "You are Reviewer A. Review this PR for bugs, security issues, and code quality. Be thorough but avoid false positives. Structure findings as Critical/Warning/Suggestion with file:line references. Here is the context: [include PR diff]"
+  prompt: "You are Reviewer A. Review this PR for bugs, security issues, and code quality. Be thorough but avoid false positives. Structure findings as Critical/Warning/Suggestion with file:line references.
+
+Beyond standard review, pay special attention to these high-risk patterns:
+
+1. **Called-but-not-changed code**: When the diff introduces a new call to existing code (especially data mutation), use the Read tool to trace INTO the called function. Verify its return value and side effects match what the caller assumes. Do not trust functions you haven't read.
+
+2. **Mutations on read paths**: Flag any write operation (DB update, cache mutation, queue publish) triggered by a GET/read endpoint. Fire-and-forget patterns that silently mutate data are high risk — the failure mode is silent data corruption with no error signal.
+
+3. **Blast radius from initial state**: When new code processes existing records conditionally (e.g. 'refresh if stale'), check the initial state of existing data. If a column starts as null/default for all existing rows, the new path hits EVERY record on first access — that is a mass data rewrite disguised as normal traffic.
+
+4. **Data contract completeness at merge boundaries**: When code spreads/merges one data source onto another (e.g. {...existing, ...fresh}), verify the fresh source returns ALL expected fields. Missing fields silently zero out or null existing data.
+
+Here is the context: [include PR diff]"
 ```
 
 **Reviewer B (Codex):**
 ```
 Use Task tool:
   subagent_type: "Bash"
-  prompt: "Run: codex --print -p 'You are Reviewer B. Review this code for bugs, security issues, and quality problems. Structure as Critical/Warning/Suggestion with file:line. Diff: [include relevant sections]'"
+  prompt: "Run: codex --print -p 'You are Reviewer B. Review this code for bugs, security issues, and quality problems. Structure as Critical/Warning/Suggestion with file:line.
+
+Beyond standard review, check for these high-risk patterns:
+1. Called-but-not-changed code: If the diff calls existing functions (especially data mutation), verify those functions return/do what the caller assumes.
+2. Mutations on read paths: Flag any DB write or cache mutation triggered by a GET/read endpoint. Fire-and-forget data rewrites are high risk.
+3. Blast radius from initial state: If new code processes records conditionally (refresh if stale), check if null/default initial state means ALL existing records get hit at once.
+4. Data contract completeness: When code spreads/merges data sources ({...existing, ...fresh}), verify the fresh source returns ALL expected fields. Missing fields silently zero out existing data.
+
+Diff: [include relevant sections]'"
 ```
 
 Wait for BOTH reviewers to complete before proceeding.
@@ -8134,6 +8154,12 @@ For EACH finding from either reviewer:
 2. **Verify the issue**: Is this a real problem or false positive?
 3. **Check context**: Does surrounding code explain/mitigate it?
 4. **When reviewers disagree**: Investigate deeper, examine edge cases
+
+**Judge's Own Investigation** (do this even if neither reviewer flagged it):
+- For any new call path to existing code that mutates data, Read the called function and verify its contract
+- If you see a write/update triggered by a read endpoint, flag it
+- If you see conditional processing of existing records (e.g. "refresh if stale"), check the initial state — does null/default mean all records get hit at once?
+- If you see object spread/merge of data sources, verify field completeness of the source
 
 **Critical Rule**: Do NOT include any finding you haven't personally verified in the code.
 
