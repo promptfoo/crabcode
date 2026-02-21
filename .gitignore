@@ -25,3 +25,6 @@ Thumbs.db
 # Test artifacts
 test-output/
 coverage/
+
+# Shared local volume (crabcode)
+.local

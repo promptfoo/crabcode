@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.10.1" # x-release-please-version
+VERSION="0.11.0" # x-release-please-version
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
@@ -7555,6 +7555,137 @@ pf_help() {
 }
 
 # =============================================================================
+# Draw Plugin Commands
+# =============================================================================
+
+handle_draw_command() {
+  local PLUGIN_DIR="$CONFIG_DIR/plugins/draw"
+
+  case "${1:-}" in
+    "install")
+      draw_install
+      ;;
+    "uninstall"|"remove")
+      draw_uninstall
+      ;;
+    "update"|"upgrade")
+      draw_uninstall
+      draw_install
+      ;;
+    "help"|"-h"|"--help"|"")
+      if [ ! -d "$PLUGIN_DIR" ] || [ ! -f "$PLUGIN_DIR/dist/cli.js" ]; then
+        draw_help
+      else
+        # No args = start new session
+        CRAB_PROJECT_ROOT="${REPO_PATH:-$(pwd)}" node "$PLUGIN_DIR/dist/cli.js" "$@"
+      fi
+      ;;
+    *)
+      # Check if plugin is installed before running
+      if [ ! -d "$PLUGIN_DIR" ] || [ ! -f "$PLUGIN_DIR/dist/cli.js" ]; then
+        echo -e "${CYAN}Crab Draw - Collaborative Excalidraw${NC}"
+        echo ""
+        echo "Plugin not installed. Install with:"
+        echo ""
+        echo -e "  ${GREEN}crab draw install${NC}"
+        echo ""
+        return 1
+      fi
+      # Pass all args to the Node.js CLI
+      CRAB_PROJECT_ROOT="${REPO_PATH:-$(pwd)}" node "$PLUGIN_DIR/dist/cli.js" "$@"
+      ;;
+  esac
+}
+
+draw_install() {
+  local PLUGIN_DIR="$CONFIG_DIR/plugins/draw"
+  local REPO_URL="https://github.com/promptfoo/crabcode.git"
+  local BRANCH="main"
+
+  echo -e "${CYAN}Installing Crab Draw...${NC}"
+
+  # Check for Node.js
+  if ! command_exists node; then
+    error "Node.js is required. Install with: brew install node"
+    return 1
+  fi
+
+  # Create plugins directory
+  mkdir -p "$CONFIG_DIR/plugins"
+
+  # Clone just the plugin directory using sparse checkout
+  local TEMP_DIR=$(mktemp -d)
+  echo "Cloning plugin from $REPO_URL..."
+
+  git clone --depth 1 --branch "$BRANCH" --filter=blob:none --sparse "$REPO_URL" "$TEMP_DIR" 2>/dev/null
+  cd "$TEMP_DIR"
+  git sparse-checkout set plugins/draw
+
+  # Move to final location
+  rm -rf "$PLUGIN_DIR"
+  mv plugins/draw "$PLUGIN_DIR"
+  cd - >/dev/null
+  rm -rf "$TEMP_DIR"
+
+  # Install dependencies and build (server + UI)
+  echo "Installing dependencies..."
+  cd "$PLUGIN_DIR"
+  npm install --silent
+  echo "Building server..."
+  npm run build:server --silent
+  echo "Building UI (this may take a moment)..."
+  npm run build:ui --silent
+  cd - >/dev/null
+
+  success "✓ Installed to $PLUGIN_DIR"
+  echo ""
+  echo "Usage:"
+  echo -e "  ${GREEN}crab draw${NC}                     Start a new drawing session"
+  echo -e "  ${GREEN}crab draw --title \"design\"${NC}    Start with a title"
+  echo -e "  ${GREEN}crab draw ls${NC}                   List saved sessions"
+  echo -e "  ${GREEN}crab draw --help${NC}               Show all options"
+}
+
+draw_uninstall() {
+  local PLUGIN_DIR="$CONFIG_DIR/plugins/draw"
+
+  if [ -d "$PLUGIN_DIR" ]; then
+    rm -rf "$PLUGIN_DIR"
+    success "✓ Uninstalled draw plugin"
+  else
+    echo "Plugin not installed"
+  fi
+}
+
+draw_help() {
+  echo -e "${CYAN}Crab Draw - Collaborative Excalidraw${NC}"
+  echo ""
+  echo "Open an Excalidraw canvas with real-time collaboration."
+  echo "Sessions are saved to your project for team sharing."
+  echo ""
+  echo -e "${BOLD}Installation:${NC}"
+  echo "  crab draw install              Install the plugin"
+  echo "  crab draw uninstall            Remove the plugin"
+  echo "  crab draw update               Update to latest version"
+  echo ""
+  echo -e "${BOLD}Usage:${NC}"
+  echo "  crab draw                      Start a new session"
+  echo "  crab draw --title \"design\"     Start with a title"
+  echo "  crab draw <session-id>         Reopen a saved session"
+  echo "  crab draw <session-id> --collab  Reopen with sharing"
+  echo "  crab draw ls                   List all sessions"
+  echo "  crab draw delete <session-id>  Delete a session"
+  echo ""
+  echo -e "${BOLD}Options:${NC}"
+  echo "  --title, -t <name>     Name the session"
+  echo "  --collab               Enable sharing tunnel"
+  echo "  --no-tunnel            Local only (no sharing)"
+  echo "  --tunnel <tool>        Use specific tunnel (cloudflared, ngrok, bore)"
+  echo ""
+  echo "Sessions are saved to .crab/draw/ and shared via git."
+}
+
+# =============================================================================
 # Multi-Project Commands
 # =============================================================================
 
@@ -9038,7 +9169,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"msg"|"message"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"session"|"review"|"court"|"ticket"|"tkt")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"msg"|"message"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"draw"|"session"|"review"|"court"|"ticket"|"tkt")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -9094,6 +9225,10 @@ main() {
     "pf"|"promptfoo")
       # Promptfoo target discovery agent
       handle_pf_command "${@:2}"
+      ;;
+    "draw")
+      # Collaborative Excalidraw sessions
+      handle_draw_command "${@:2}"
       ;;
     "session"|"sessions")
       # Session management
