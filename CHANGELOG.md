@@ -7,6 +7,22 @@
 - **Self-update**: bypass GitHub raw CDN cache so `crab update` always fetches the latest version
 - **Messaging**: preserve float precision in listen polling timestamp to prevent missed messages
 
+## [0.11.1](https://github.com/promptfoo/crabcode/compare/v0.11.0...v0.11.1) (2026-02-22)
+
+
+### Features
+
+* **court,review:** allow starting fresh when session already exists ([412d7d3](https://github.com/promptfoo/crabcode/commit/412d7d3d2ac8012edea0d047fa38a75e63a72e0b))
+* **court:** enhance reviewer and judge prompts to catch silent data corruption ([#31](https://github.com/promptfoo/crabcode/issues/31)) ([f901632](https://github.com/promptfoo/crabcode/commit/f901632278897698ba32bf3ab910b105640ae7fc))
+* **draw:** add collaborative Excalidraw plugin with real-time collab ([b013517](https://github.com/promptfoo/crabcode/commit/b01351793749e9e8db5fe0ea4e136255dd430b2f))
+* **wip:** save and restore Claude sessions across WIP save/restore ([b303372](https://github.com/promptfoo/crabcode/commit/b303372deaa1995eabb678bb5c23052eb677d834))
+
+
+### Bug Fixes
+
+* **crab-pf:** replace broken verify with smoke+session test, add session handling ([#32](https://github.com/promptfoo/crabcode/issues/32)) ([3f5ee99](https://github.com/promptfoo/crabcode/commit/3f5ee994e5b3e7dfbd345b1af040825dc0ce26fd))
+* **crab-pf:** require test prompts to match provider input format ([#33](https://github.com/promptfoo/crabcode/issues/33)) ([b5017cb](https://github.com/promptfoo/crabcode/commit/b5017cb093fb157f7658c8c9cde3a662901b3f98))
+
 ## [0.9.1] - 2026-02-13
 
 ### Added
