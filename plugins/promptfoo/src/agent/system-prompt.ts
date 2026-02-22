@@ -98,6 +98,8 @@ For **HTTP providers**: Use \`sessionParser\` in the config to extract the sessi
 5. Verify — runs provider smoke test + session test, then promptfoo eval with 2 test cases
 6. Call done() with results
 
+**Test prompts in promptfooconfig.yaml MUST match the input format your provider expects.** If the provider parses JSON objects, test with valid JSON. If it expects keywords, test with those keywords. Generic prompts like "Hello" will fail providers that require structured input.
+
 Be intelligent. Figure out the target's protocol, auth, request/response format from probing. Generate configs that work.`;
 
 export function getDiscoveryPrompt(additionalContext?: string): string {
