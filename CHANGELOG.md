@@ -9,18 +9,16 @@
 
 ## [0.11.1](https://github.com/promptfoo/crabcode/compare/v0.11.0...v0.11.1) (2026-02-22)
 
-
 ### Features
 
-* **court,review:** allow starting fresh when session already exists ([412d7d3](https://github.com/promptfoo/crabcode/commit/412d7d3d2ac8012edea0d047fa38a75e63a72e0b))
-* **court:** enhance reviewer and judge prompts to catch silent data corruption ([#31](https://github.com/promptfoo/crabcode/issues/31)) ([f901632](https://github.com/promptfoo/crabcode/commit/f901632278897698ba32bf3ab910b105640ae7fc))
-* **draw:** add collaborative Excalidraw plugin with real-time collab ([b013517](https://github.com/promptfoo/crabcode/commit/b01351793749e9e8db5fe0ea4e136255dd430b2f))
-* **wip:** save and restore Claude sessions across WIP save/restore ([b303372](https://github.com/promptfoo/crabcode/commit/b303372deaa1995eabb678bb5c23052eb677d834))
-
+- **court,review:** allow starting fresh when session already exists ([412d7d3](https://github.com/promptfoo/crabcode/commit/412d7d3d2ac8012edea0d047fa38a75e63a72e0b))
+- **court:** enhance reviewer and judge prompts to catch silent data corruption ([#31](https://github.com/promptfoo/crabcode/issues/31)) ([f901632](https://github.com/promptfoo/crabcode/commit/f901632278897698ba32bf3ab910b105640ae7fc))
+- **draw:** add collaborative Excalidraw plugin with real-time collab ([b013517](https://github.com/promptfoo/crabcode/commit/b01351793749e9e8db5fe0ea4e136255dd430b2f))
+- **wip:** save and restore Claude sessions across WIP save/restore ([b303372](https://github.com/promptfoo/crabcode/commit/b303372deaa1995eabb678bb5c23052eb677d834))
 
 ### Bug Fixes
 
-* **crab-pf:** replace broken verify with smoke+session test, add session handling ([#32](https://github.com/promptfoo/crabcode/issues/32)) ([3f5ee99](https://github.com/promptfoo/crabcode/commit/3f5ee994e5b3e7dfbd345b1af040825dc0ce26fd))
+- **crab-pf:** replace broken verify with smoke+session test, add session handling ([#32](https://github.com/promptfoo/crabcode/issues/32)) ([3f5ee99](https://github.com/promptfoo/crabcode/commit/3f5ee994e5b3e7dfbd345b1af040825dc0ce26fd))
 
 ## [0.9.1] - 2026-02-13
 
@@ -44,6 +42,7 @@
 ## [0.8.0] - 2026-02-09
 
 ### Added
+
 - **Court Review system**: thorough multi-agent PR review with judge pattern
   - `crab court <PR>` — spawns Judge (Claude) + Reviewer A (Claude teammate) + Reviewer B (Codex)
   - Judge orchestrates reviewers, verifies findings by tracing actual code
@@ -57,17 +56,20 @@
   - `crab review show <PR>` displays saved review output
 
 ### Changed
+
 - Simplified review system: removed `--with-codex` and `collab` modes in favor of `crab court`
 - `crab review <PR>` now does quick single-agent review (fast, simple)
 - `crab court <PR>` is the thorough option (judge + 2 reviewers)
 
 ### Fixed
+
 - WIP restore now properly opens workspace when run from outside (was checking wrong directory)
 - Review sessions now run from session directory so Claude can write output files
 
 ## [0.7.0] - 2026-02-08
 
 ### Added
+
 - **Session management**: track and resume Claude conversations
   - `crab session ls` — list sessions with inline summaries
   - `crab session start "name"` — start new named session
@@ -83,6 +85,7 @@
   - PR context auto-fetched via gh CLI
 
 ### Changed
+
 - `crab restart` now fully recreates window layout (fixes missing panes after close)
 - Team mode always enabled (instructions in .claude/CLAUDE.md)
 - Removed `--team` flag (no longer needed)
@@ -90,6 +93,7 @@
 ## [0.6.0] - 2026-02-05
 
 ### Added
+
 - **Agent Teams integration**: team mode always enabled in workspaces
   - Team instructions auto-added to `.claude/CLAUDE.md`
   - Claude spawns agent teammates when tasks warrant parallel work
@@ -99,6 +103,7 @@
 ## [0.5.0] - 2026-02-04
 
 ### Added
+
 - **Multi-project support**: manage multiple repos from a single crabcode install
   - `crab @alias <cmd>` — run any command against a specific project
   - `crab projects` — list all registered projects with tmux status
@@ -110,6 +115,7 @@
 - Project context shown in `config`, `doctor`, `status`, and `help` output
 
 ### Changed
+
 - Config structure: project configs now live in `~/.crabcode/projects/<alias>.yaml`
 - Global config (`~/.crabcode/config.yaml`) now only stores `default_project`
 - Templates use `ALIAS_PLACEHOLDER` for `session_name` (was hardcoded `crab`)
@@ -117,6 +123,7 @@
 - `apply_template()` accepts a 4th `alias` parameter
 
 ### Fixed
+
 - `crab restart` from a workspace dir now correctly detects the owning project
 - Legacy config migration no longer clobbers global config on subsequent `crab init`
 
@@ -150,6 +157,7 @@
 ## [0.3.0] - 2026-01-15
 
 ### Added
+
 - Workspace handoff (`crab handoff`, `crab receive`)
 - Time travel / snapshots (`crab rewind`, `crab snapshot`)
 - Live pairing sessions (`crab pair`, `crab join`, `crab spectate`)
@@ -161,6 +169,7 @@
 ## [0.2.0] - 2026-01-10
 
 ### Added
+
 - WIP save/restore system with global index
 - Port spacing and env_sync with refs
 - MCP server sync from main repo
@@ -171,6 +180,7 @@
 ## [0.1.0] - 2026-01-05
 
 ### Added
+
 - Initial release
 - Tmux-based workspace management with git worktrees
 - Configurable layouts with named panes
