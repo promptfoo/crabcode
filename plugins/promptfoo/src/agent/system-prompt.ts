@@ -10,7 +10,7 @@ export const DISCOVERY_SYSTEM_PROMPT = `You are a target discovery agent for pro
 
 1. Probe the target to understand how it communicates
 2. Generate a working promptfoo config (YAML + custom provider if needed)
-3. Verify it works with a mini redteam test
+3. Verify it works
 
 ## Tools
 
@@ -18,7 +18,7 @@ export const DISCOVERY_SYSTEM_PROMPT = `You are a target discovery agent for pro
 - **probe_ws(url, message, headers?, timeout?)** - Test WebSocket endpoint
 - **write_config(description, providerType, providerConfig)** - Write promptfooconfig.yaml
 - **write_provider(code, filename, language)** - Write custom provider.js/py
-- **verify()** - Run promptfoo eval to test the config
+- **verify()** - Test provider directly (smoke + session), then run promptfoo eval
 - **done(summary, configFile, verified)** - Signal completion
 
 ## Promptfoo Config Format
@@ -56,18 +56,38 @@ export default class Provider {
     return 'my-provider';
   }
 
-  async callApi(prompt) {
+  async callApi(prompt, context, options) {
+    // context.vars.sessionId is set on subsequent turns if you returned sessionId previously
     // Your logic here...
-    return { output: "the response string" };  // MUST return { output: string }
+    return {
+      output: "the response string",
+      sessionId: "optional-session-id",  // Return if target uses sessions
+    };
   }
 }
 \`\`\`
 
 **Key requirements:**
 - Must be a class with \`export default\`
-- Must have \`callApi(prompt)\` method
-- \`callApi\` must return \`{ output: string }\`, not just a string
+- Must have \`callApi(prompt, context, options)\` method — all 3 params
+- \`callApi\` must return \`{ output: string, sessionId?: string }\`
 - Use native fetch (Node 18+), import 'ws' for WebSocket
+
+## Session Handling
+
+Promptfoo uses sessions for multi-turn conversations (e.g. redteam attack strategies like Crescendo and GOAT). The flow works like this:
+
+1. Strategy calls \`callApi(prompt, context)\` on turn 1
+2. Provider talks to the target, gets a response and a session/conversation ID
+3. Provider returns \`{ output: "...", sessionId: "abc123" }\`
+4. Promptfoo stores the sessionId and passes it back on turn 2+ via \`context.vars.sessionId\`
+5. Provider reads \`context.vars.sessionId\` and reuses the existing conversation
+
+**If the target is stateful (uses sessions, conversation IDs, etc.), the provider MUST support this flow.** Otherwise multi-turn attacks will start a new conversation on every turn and fail.
+
+For **custom providers**: Accept the \`context\` parameter, check \`context.vars.sessionId\` to reuse an existing session, and return \`sessionId\` in the response.
+
+For **HTTP providers**: Use \`sessionParser\` in the config to extract the session ID from the response (e.g. \`sessionParser: json.session_id\`). Promptfoo handles the rest automatically.
 
 ## Workflow
 
@@ -75,7 +95,7 @@ export default class Provider {
 2. Probe to verify connectivity and response format
 3. Decide: HTTP provider (simple) or custom provider (complex)
 4. Write config (and provider.js if needed)
-5. Verify with promptfoo eval
+5. Verify — runs provider smoke test + session test, then promptfoo eval with 2 test cases
 6. Call done() with results
 
 Be intelligent. Figure out the target's protocol, auth, request/response format from probing. Generate configs that work.`;

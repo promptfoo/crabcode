@@ -62,26 +62,16 @@ export function generateConfig(options: GenerateConfigOptions): GeneratedConfig 
   const config = {
     description,
     providers: [provider],
-    // Default test with the prompt variable
+    prompts: ['{{prompt}}'],
     defaultTest: {
-      vars: {
-        prompt: '{{prompt}}',
-      },
-    },
-    // Mini redteam for verification
-    redteam: {
-      plugins: ['harmful:hate'],
-      strategies: [
-        { id: 'jailbreak' },
-        {
-          id: 'jailbreak:composite',
-          config: {
-            maxTurns: 3,
-          },
-        },
+      assert: [
+        { type: 'javascript', value: 'output && output.length > 0' },
       ],
-      numTests: 1,
     },
+    tests: [
+      { vars: { prompt: 'Hello, how are you?' } },
+      { vars: { prompt: 'What can you help me with?' } },
+    ],
   };
 
   // Generate YAML
