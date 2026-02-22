@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+## [0.12.0] - 2026-02-20
+
+### Added
+
+- **Slack-powered promptfoo agent** (`crab pf serve`): non-technical team members can DM the Crab bot in Slack to run the target discovery agent
+  - `crab pf serve --setup` — one-time config (Slack username, LLM provider)
+  - `crab pf serve` — starts local polling daemon
+  - Messages prefixed with `pf:` trigger the agent; file attachments supported
+  - Results (`promptfooconfig.yaml`) posted back to the Slack thread
+  - Each user runs their own daemon with their own API keys — no central server
+- **Excalidraw plugin** (`crab draw`): collaborative whiteboarding with real-time collab
+  - `crab draw new "name"` — create a new Excalidraw session
+  - `crab draw open "name"` — open an existing session
+  - `crab draw ls` — list active sessions
+  - `crab draw delete "name"` — delete a session (with interactive disambiguation)
+  - Real-time collaboration via Excalidraw's collab protocol
+- **GPT-5 reasoning support** for `crab pf`: `--reasoning` flag with `low`/`medium`/`high` effort levels for GPT-5 and o-series models
+- **Court/Review**: allow starting fresh when a review session already exists
+
+### Changed
+
+- **crab pf** defaults to `openai:gpt-5` with `reasoning: low` (was `openai:gpt-4o`)
+
+### Fixed
+
+- **crab pf**: test prompts now match provider input format
+- **crab pf**: replaced broken verify step with smoke + session test, improved session handling
+
+## [0.10.0] - 2026-02-15
+
+### Added
+
+- **WIP session persistence**: `crab wip save` and `crab wip restore` now save and restore Claude sessions across workspace boundaries
+- **Court review improvements**: enhanced reviewer and judge prompts to catch silent data corruption
+- **Release automation**: set up release-please for automated releases
+
 ### Fixed
 
 - **Self-update**: bypass GitHub raw CDN cache so `crab update` always fetches the latest version
