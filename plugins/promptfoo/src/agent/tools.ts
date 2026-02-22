@@ -133,7 +133,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'verify',
-    description: 'Run a mini redteam test to verify the configuration works. This sends a few test prompts through the target.',
+    description: 'Verify the configuration works. Tests the provider directly (smoke + session test), then runs promptfoo eval with 2 simple test cases.',
     parameters: {
       type: 'object',
       properties: {
@@ -141,11 +141,6 @@ export const toolDefinitions: ToolDefinition[] = [
           type: 'string',
           description: 'Path to the config file to verify (default: promptfooconfig.yaml)',
           default: 'promptfooconfig.yaml',
-        },
-        numTests: {
-          type: 'number',
-          description: 'Number of test prompts to send (default: 3)',
-          default: 3,
         },
       },
     },

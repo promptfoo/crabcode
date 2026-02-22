@@ -63,8 +63,12 @@ export class OpenAIProvider implements LLMProvider {
         model: this.model,
         messages: options.messages.map((m) => this.toOpenAIMessage(m)),
         tools: options.tools,
-        max_tokens: options.maxTokens || 4096,
-        temperature: options.temperature ?? 0.7,
+        ...(this.model.startsWith('gpt-5') || this.model.startsWith('o1') || this.model.startsWith('o3')
+          ? { max_completion_tokens: options.maxTokens || 4096 }
+          : { max_tokens: options.maxTokens || 4096 }),
+        ...(this.model.startsWith('gpt-5') || this.model.startsWith('o1') || this.model.startsWith('o3')
+          ? {}
+          : { temperature: options.temperature ?? 0.7 }),
       }),
     });
 

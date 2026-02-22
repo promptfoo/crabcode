@@ -13,7 +13,9 @@ import { toOpenAITools, toAnthropicTools } from './tools.js';
 import type { LLMProvider, Message, ToolCall, ChatResponse } from './providers.js';
 import type { DiscoveryResult } from '../types.js';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { execSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 export interface AgentOptions {
   context: string; // Raw artifact or description
@@ -76,7 +78,7 @@ Steps:
 2. Send a probe to verify connectivity
 3. Identify the prompt field and response field
 4. Generate the config (and provider file if needed)
-5. Verify it works with a mini redteam test
+5. Verify it works
 6. Call done() when complete`,
     },
   ];
@@ -268,60 +270,113 @@ async function executeTool(
       }
 
       case 'verify': {
-        const { configFile, numTests } = args as {
+        const { configFile } = args as {
           configFile?: string;
-          numTests?: number;
         };
 
         const configPath = configFile || state.configFile || 'promptfooconfig.yaml';
+        const steps: string[] = [];
 
-        // Install dependencies if package.json exists
-        const packageJsonPath = `${outputDir}/package.json`;
-        if (fs.existsSync(packageJsonPath)) {
-          try {
-            execSync(`cd "${outputDir}" && npm install --silent 2>&1`, {
-              timeout: 60000,
-              encoding: 'utf-8',
-            });
-          } catch {
-            // Ignore install errors, will fail in eval if deps missing
+        // Step 1: Direct provider smoke + session test
+        const providerPath = path.join(outputDir, 'provider.js');
+        if (fs.existsSync(providerPath)) {
+          // Install dependencies first if package.json exists
+          const packageJsonPath = path.join(outputDir, 'package.json');
+          if (fs.existsSync(packageJsonPath)) {
+            try {
+              execSync(`cd "${outputDir}" && npm install --silent 2>&1`, {
+                timeout: 60000,
+                encoding: 'utf-8',
+              });
+            } catch {
+              // Ignore install errors, will surface in import
+            }
           }
+
+          const providerUrl = pathToFileURL(path.resolve(providerPath)).href + `?t=${Date.now()}`;
+          const mod = await import(providerUrl);
+          const ProviderClass = mod.default;
+          const instance = new ProviderClass({ config: {} });
+
+          // Smoke test
+          const r1 = await instance.callApi('Hello, this is a test message', { vars: {} }, {});
+          if (!r1 || !r1.output || r1.error) {
+            const err = r1?.error || 'empty output';
+            steps.push(`Smoke test FAILED: ${err}`);
+            state.verified = false;
+            result = { success: false, error: `Provider smoke test failed: ${err}`, steps };
+            break;
+          }
+          steps.push(`Smoke test PASSED: got ${r1.output.length} chars`);
+
+          // Session test — second call, passing sessionId from first response (mimics promptfoo strategy flow)
+          const sessionContext = r1.sessionId
+            ? { vars: { sessionId: r1.sessionId } }
+            : { vars: {} };
+          const r2 = await instance.callApi('Follow up question', sessionContext, {});
+          if (!r2 || !r2.output || r2.error) {
+            const err = r2?.error || 'empty output';
+            steps.push(`Session test FAILED: ${err}`);
+            state.verified = false;
+            result = { success: false, error: `Provider session test failed: ${err}`, steps };
+            break;
+          }
+          steps.push(`Session test PASSED: got ${r2.output.length} chars${r1.sessionId ? `, sessionId: ${r1.sessionId}` : ''}`);
         }
 
-        // Try to run promptfoo eval
+        // Step 2: Run promptfoo eval
         try {
           const output = execSync(
             `cd "${outputDir}" && npx promptfoo eval -c "${configPath}" --no-progress-bar 2>&1`,
             { timeout: 120000, encoding: 'utf-8' }
           );
 
-          // Check for actual failures, ignoring version warnings
-          const hasTestFailure = output.includes('[FAIL]') || output.includes('Test failed');
-          const hasConfigError = output.includes('Error loading config') || output.includes('Invalid config');
-          const hasProviderError = output.includes('Provider error') || output.includes('Connection refused');
+          const passMatch = output.match(/(\d+) passed/);
+          const failMatch = output.match(/(\d+) failed/);
+          const errorMatch = output.match(/(\d+) error/);
+          const passed = passMatch ? parseInt(passMatch[1]) : 0;
+          const failed = failMatch ? parseInt(failMatch[1]) : 0;
+          const errors = errorMatch ? parseInt(errorMatch[1]) : 0;
 
-          state.verified = !hasTestFailure && !hasConfigError && !hasProviderError;
+          const hasConfigError = output.includes('Error loading config') || output.includes('Invalid config');
+
+          if (passed === 0 && failed === 0) {
+            steps.push('Eval FAILED: zero tests ran');
+            state.verified = false;
+          } else if (failed > 0 || errors > 0 || hasConfigError) {
+            steps.push(`Eval FAILED: ${passed} passed, ${failed} failed, ${errors} errors`);
+            state.verified = false;
+          } else {
+            steps.push(`Eval PASSED: ${passed} passed, ${failed} failed`);
+            state.verified = true;
+          }
 
           result = {
             success: state.verified,
             output: output.slice(0, 1000),
+            steps,
           };
         } catch (error) {
           const err = error as { message: string; stdout?: string; stderr?: string };
-          // If promptfoo ran but returned non-zero, check if tests actually passed
           const stdout = err.stdout || '';
-          const hasPassingOutput = stdout.includes('[PASS]') || stdout.includes('Evaluation complete');
+
+          const passMatch = stdout.match(/(\d+) passed/);
+          const passed = passMatch ? parseInt(passMatch[1]) : 0;
+
+          if (passed > 0 && !stdout.includes('failed')) {
+            steps.push(`Eval PASSED (non-zero exit): ${passed} passed`);
+            state.verified = true;
+          } else {
+            steps.push(`Eval FAILED: ${err.message.slice(0, 200)}`);
+            state.verified = false;
+          }
 
           result = {
-            success: hasPassingOutput,
-            error: hasPassingOutput ? undefined : err.message,
+            success: state.verified,
+            error: state.verified ? undefined : err.message,
             stdout: stdout.slice(0, 1000),
-            stderr: err.stderr?.slice(0, 500),
+            steps,
           };
-
-          if (hasPassingOutput) {
-            state.verified = true;
-          }
         }
         break;
       }
