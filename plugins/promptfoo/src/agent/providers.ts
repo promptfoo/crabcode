@@ -22,6 +22,7 @@ export interface ChatOptions {
   tools: unknown[];
   maxTokens?: number;
   temperature?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high';
 }
 
 export interface ChatResponse {
@@ -41,11 +42,13 @@ export class OpenAIProvider implements LLMProvider {
   private apiKey: string;
   private model: string;
   private baseUrl: string;
+  reasoningEffort?: string;
 
-  constructor(options: { apiKey?: string; model?: string; baseUrl?: string }) {
+  constructor(options: { apiKey?: string; model?: string; baseUrl?: string; reasoningEffort?: string }) {
     this.apiKey = options.apiKey || process.env.OPENAI_API_KEY || '';
     this.model = options.model || 'gpt-4o';
     this.baseUrl = options.baseUrl || 'https://api.openai.com/v1';
+    this.reasoningEffort = options.reasoningEffort;
 
     if (!this.apiKey) {
       throw new Error('OpenAI API key required. Set OPENAI_API_KEY env var.');
@@ -69,6 +72,7 @@ export class OpenAIProvider implements LLMProvider {
         ...(this.model.startsWith('gpt-5') || this.model.startsWith('o1') || this.model.startsWith('o3')
           ? {}
           : { temperature: options.temperature ?? 0.7 }),
+        ...(options.reasoningEffort || this.reasoningEffort ? { reasoning_effort: options.reasoningEffort || this.reasoningEffort } : {}),
       }),
     });
 
@@ -257,12 +261,12 @@ export class AnthropicProvider implements LLMProvider {
 /**
  * Create provider from string identifier
  */
-export function createProvider(provider: string): LLMProvider {
+export function createProvider(provider: string, options?: { reasoningEffort?: string }): LLMProvider {
   const [type, model] = provider.split(':');
 
   switch (type) {
     case 'openai':
-      return new OpenAIProvider({ model: model || 'gpt-4o' });
+      return new OpenAIProvider({ model: model || 'gpt-4o', reasoningEffort: options?.reasoningEffort });
     case 'anthropic':
       return new AnthropicProvider({ model: model || 'claude-sonnet-4-20250514' });
     default:
