@@ -27,6 +27,7 @@ async function main() {
     const outputDir = getArg('--output') || getArg('-o') || '.';
     const verbose = args.includes('--verbose') || args.includes('-v');
     const maxTurns = parseInt(getArg('--max-turns') || '30', 10);
+    const reasoningEffort = getArg('--reasoning');
 
     let context: string;
 
@@ -52,7 +53,7 @@ async function main() {
     // Detect format
     const format = detectFormat(context);
     console.log(`Detected format: ${format === 'unknown' ? 'text/description' : format}`);
-    console.log(`Provider: ${providerStr}`);
+    console.log(`Provider: ${providerStr}${reasoningEffort ? ` (reasoning: ${reasoningEffort})` : ''}`);
     console.log(`Output: ${outputDir}`);
     console.log('');
 
@@ -62,7 +63,7 @@ async function main() {
     }
 
     // Create provider
-    const provider = createProvider(providerStr);
+    const provider = createProvider(providerStr, reasoningEffort ? { reasoningEffort } : undefined);
 
     // Run discovery agent
     console.log('Starting target discovery agent...');
@@ -134,6 +135,7 @@ Options:
   --output, -o <dir>     Output directory (default: current dir)
   --provider <provider>  LLM provider (default: openai:gpt-4o)
   --max-turns <n>        Max agent turns (default: 30)
+  --reasoning <effort>   Reasoning effort for GPT-5/o-series (low, medium, high)
   --verbose, -v          Show detailed output
 
 Supported input formats:
