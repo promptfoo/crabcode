@@ -27,7 +27,7 @@
 
 set -e
 
-VERSION="0.11.0" # x-release-please-version
+VERSION="0.12.0" # x-release-please-version
 CONFIG_DIR="$HOME/.crabcode"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 WIP_BASE="$CONFIG_DIR/wip"
