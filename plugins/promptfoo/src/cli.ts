@@ -15,11 +15,18 @@ import * as path from 'node:path';
 import { parseArtifact, detectFormat } from './parsers/index.js';
 import { runDiscoveryAgent } from './agent/loop.js';
 import { createProvider } from './agent/providers.js';
+import { runServe } from './serve.js';
 
 const args = process.argv.slice(2);
 
 async function main() {
   try {
+    // Handle 'serve' subcommand
+    if (args[0] === 'serve') {
+      await runServe(args.slice(1));
+      return;
+    }
+
     // Parse arguments
     const filePath = getArg('--file') || getArg('-f');
     const urlArg = getArg('--url');
@@ -159,6 +166,11 @@ Examples:
 
   # Using Anthropic
   crab pf --file target.txt --provider anthropic:claude-sonnet-4-20250514
+
+Subcommands:
+  serve                  Run Slack polling daemon
+  serve --setup          Configure Slack username
+  serve --help           Show serve help
 
 Output:
   The agent will create:

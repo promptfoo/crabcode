@@ -56,6 +56,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async chat(options: ChatOptions): Promise<ChatResponse> {
+    const isReasoning = this.model.startsWith('gpt-5') || this.model.startsWith('o1') || this.model.startsWith('o3');
     const response = await fetch(`${this.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -66,13 +67,13 @@ export class OpenAIProvider implements LLMProvider {
         model: this.model,
         messages: options.messages.map((m) => this.toOpenAIMessage(m)),
         tools: options.tools,
-        ...(this.model.startsWith('gpt-5') || this.model.startsWith('o1') || this.model.startsWith('o3')
+        ...(isReasoning
           ? { max_completion_tokens: options.maxTokens || 4096 }
           : { max_tokens: options.maxTokens || 4096 }),
-        ...(this.model.startsWith('gpt-5') || this.model.startsWith('o1') || this.model.startsWith('o3')
-          ? {}
-          : { temperature: options.temperature ?? 0.7 }),
-        ...(options.reasoningEffort || this.reasoningEffort ? { reasoning_effort: options.reasoningEffort || this.reasoningEffort } : {}),
+        ...(isReasoning ? {} : { temperature: options.temperature ?? 0.7 }),
+        ...(options.reasoningEffort || this.reasoningEffort
+          ? { reasoning_effort: options.reasoningEffort || this.reasoningEffort }
+          : {}),
       }),
     });
 
