@@ -170,6 +170,7 @@ crab pf --file target.txt                    # Analyze from file
 crab pf "curl -X POST http://..."            # Analyze curl command
 crab pf --file api.json --output ./config    # Specify output dir
 crab pf --file spec.yaml --verbose           # Show detailed output
+crab pf --reasoning high                     # Set reasoning effort (low/medium/high)
 crab pf uninstall                            # Remove the plugin
 ```
 
@@ -177,7 +178,39 @@ crab pf uninstall                            # Remove the plugin
 
 **Requirements:** Node.js, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
 
-The agent probes the target, figures out the protocol (HTTP, WebSocket, polling, etc.), generates the config, and verifies it works.
+The agent probes the target, figures out the protocol (HTTP, WebSocket, polling, etc.), generates the config, and verifies it works. Defaults to GPT-5 with `reasoning: low`.
+
+#### Slack Integration (`crab pf serve`)
+
+Let non-technical team members run the discovery agent by DM'ing the Crab bot in Slack. Each user runs their own local daemon with their own API keys.
+
+```bash
+crab pf serve --setup          # One-time: set Slack username + provider
+crab pf serve                  # Start the polling daemon
+crab pf serve -v               # Start with verbose output
+```
+
+Users DM the bot with `pf:` prefix to trigger the agent:
+```
+pf: My API is at http://localhost:8080/chat, POST with JSON { "message": "the prompt" }
+```
+
+File attachments (API specs, curl commands) are also supported. Results are posted back to the Slack thread as downloadable files.
+
+### Excalidraw Whiteboard (`crab draw`)
+
+Collaborative whiteboarding with real-time collab via Excalidraw.
+
+```bash
+crab draw install              # Install the plugin
+crab draw new "architecture"   # Create a new session
+crab draw open "architecture"  # Open an existing session
+crab draw ls                   # List active sessions
+crab draw delete "architecture" # Delete a session
+crab draw uninstall            # Remove the plugin
+```
+
+Sessions support real-time collaboration — share the URL with teammates to draw together.
 
 ### PR Review Commands (`crab review`, `crab court`)
 
@@ -207,6 +240,46 @@ crab review resume <PR>     # Resume a review
 crab review delete <PR>     # Delete a review session
 ```
 
+### Session Management (`crab session`)
+
+Track and resume Claude conversations across workspaces:
+
+```bash
+crab session start "feature-x"    # Start a named session
+crab session resume "feature-x"   # Resume an existing session
+crab session ls                   # List sessions with summaries
+crab session delete "feature-x"   # Delete a session
+```
+
+### Linear Tickets (`crab ticket`)
+
+Open a workspace directly from a Linear ticket:
+
+```bash
+crab ticket ENG-1234             # Creates branch, sets up workspace, links ticket
+```
+
+### P2P Messaging (`crab msg`)
+
+Peer-to-peer messaging with self-hosted relay:
+
+```bash
+crab msg send @user "message"    # Send a message
+crab msg listen                  # Listen for incoming messages (with TTS)
+crab msg relay                   # Run your own relay server
+```
+
+### Command Aliases (`crab alias`)
+
+Define custom shortcuts for frequently used commands:
+
+```bash
+crab alias add deploy "ws 1 restart"   # Create an alias
+crab alias ls                          # List aliases
+```
+
+Aliases are stored in `~/.crabcode/aliases.yaml`.
+
 ### Other Commands
 
 ```bash
@@ -214,6 +287,7 @@ crab doctor              # Diagnose issues
 crab ports               # Show port usage
 crab shared              # Show shared volume info
 crab cheat               # Show cheat sheet
+crab update              # Self-update to latest version
 ```
 
 ## Setup Flow
@@ -314,26 +388,20 @@ See `examples/` for more configuration examples.
 ## Requirements
 
 **Core:**
-- bash
-- tmux
-- git
-- [yq](https://github.com/mikefarah/yq) (YAML parsing)
-- zip (for toolkit share)
+- bash, tmux, git, [yq](https://github.com/mikefarah/yq), zip
+
+**For plugins (`crab pf`, `crab draw`):**
+- Node.js 20+
+- `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (for `crab pf`)
+- Slack bot token (for `crab pf serve`)
 
 **For PR reviews (`crab review`, `crab court`):**
-- [gh](https://cli.github.com/) (GitHub CLI)
-- [Claude Code](https://claude.ai/code) (`claude` CLI)
-
-**Optional (for court review with Codex):**
-- [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`)
+- [gh](https://cli.github.com/), [Claude Code](https://claude.ai/code)
+- Optional: [Codex CLI](https://github.com/openai/codex) (for court review)
 
 ```bash
 # macOS
 brew install tmux yq zip gh
-npm install -g @anthropic-ai/claude-code  # Claude Code
-
-# Ubuntu/Debian
-apt install tmux yq zip gh
 npm install -g @anthropic-ai/claude-code
 ```
 
