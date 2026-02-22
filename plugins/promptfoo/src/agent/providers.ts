@@ -266,7 +266,7 @@ export function createProvider(provider: string, options?: { reasoningEffort?: s
 
   switch (type) {
     case 'openai':
-      return new OpenAIProvider({ model: model || 'gpt-4o', reasoningEffort: options?.reasoningEffort });
+      return new OpenAIProvider({ model: model || 'gpt-5', reasoningEffort: options?.reasoningEffort });
     case 'anthropic':
       return new AnthropicProvider({ model: model || 'claude-sonnet-4-20250514' });
     default:

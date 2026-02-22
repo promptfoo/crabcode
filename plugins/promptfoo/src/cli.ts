@@ -23,11 +23,11 @@ async function main() {
     // Parse arguments
     const filePath = getArg('--file') || getArg('-f');
     const urlArg = getArg('--url');
-    const providerStr = getArg('--provider') || process.env.DISCOVERY_PROVIDER || 'openai:gpt-4o';
+    const providerStr = getArg('--provider') || process.env.DISCOVERY_PROVIDER || 'openai:gpt-5';
     const outputDir = getArg('--output') || getArg('-o') || '.';
     const verbose = args.includes('--verbose') || args.includes('-v');
     const maxTurns = parseInt(getArg('--max-turns') || '30', 10);
-    const reasoningEffort = getArg('--reasoning');
+    const reasoningEffort = getArg('--reasoning') || 'low';
 
     let context: string;
 
@@ -133,7 +133,7 @@ Options:
   --file, -f <path>      Read target specification from file
   --url <url>            Probe a URL directly
   --output, -o <dir>     Output directory (default: current dir)
-  --provider <provider>  LLM provider (default: openai:gpt-4o)
+  --provider <provider>  LLM provider (default: openai:gpt-5)
   --max-turns <n>        Max agent turns (default: 30)
   --reasoning <effort>   Reasoning effort for GPT-5/o-series (low, medium, high)
   --verbose, -v          Show detailed output
