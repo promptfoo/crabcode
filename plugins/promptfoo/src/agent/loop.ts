@@ -154,11 +154,14 @@ Steps:
       toolCalls: response.toolCalls,
     });
 
-    // 5. Add tool results
+    // 5. Add tool results — include error in content so LLM can reason about failures
     for (const result of toolResults) {
+      const content = result.error
+        ? JSON.stringify({ error: result.error, result: result.result })
+        : JSON.stringify(result.result);
       messages.push({
         role: 'tool',
-        content: JSON.stringify(result.result),
+        content,
         toolCallId: result.toolCallId,
       });
     }
@@ -301,10 +304,10 @@ async function executeTool(
           // Smoke test
           const r1 = await instance.callApi('Hello, this is a test message', { vars: {} }, {});
           if (!r1 || !r1.output || r1.error) {
-            const err = r1?.error || 'empty output';
-            steps.push(`Smoke test FAILED: ${err}`);
+            const diag = JSON.stringify(r1, null, 2)?.slice(0, 500) || 'null response';
+            steps.push(`Smoke test FAILED. Provider returned: ${diag}`);
             state.verified = false;
-            result = { success: false, error: `Provider smoke test failed: ${err}`, steps };
+            result = { success: false, error: `Provider smoke test failed`, providerResponse: r1, steps };
             break;
           }
           steps.push(`Smoke test PASSED: got ${r1.output.length} chars`);
@@ -315,10 +318,10 @@ async function executeTool(
             : { vars: {} };
           const r2 = await instance.callApi('Follow up question', sessionContext, {});
           if (!r2 || !r2.output || r2.error) {
-            const err = r2?.error || 'empty output';
-            steps.push(`Session test FAILED: ${err}`);
+            const diag = JSON.stringify(r2, null, 2)?.slice(0, 500) || 'null response';
+            steps.push(`Session test FAILED. Provider returned: ${diag}`);
             state.verified = false;
-            result = { success: false, error: `Provider session test failed: ${err}`, steps };
+            result = { success: false, error: `Provider session test failed`, providerResponse: r2, steps };
             break;
           }
           steps.push(`Session test PASSED: got ${r2.output.length} chars${r1.sessionId ? `, sessionId: ${r1.sessionId}` : ''}`);
