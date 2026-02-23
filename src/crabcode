@@ -7184,6 +7184,13 @@ show_cheat() {
 ║                                                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
+║  MARKDOWN RENDERER (crab md ...)                                              ║
+║  ────────────────────────────────────────────────────────────────────────     ║
+║  crab md <file>              Render markdown in browser (GFM + dark mode)    ║
+║  crab md --update-assets     Re-download rendering libraries                  ║
+║                                                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
 ║  TMUX KEYBINDINGS (Prefix = Ctrl+a)                                           ║
 ║  ────────────────────────────────────────────────────────────────────────     ║
 ║  Option+1,2,3...       Switch to workspace 1, 2, 3...                         ║
@@ -7250,6 +7257,9 @@ show_help() {
   echo "  tk share --to ssh:user@host   SSH transfer"
   echo "  tk share --to slack:#channel  Slack upload"
   echo "  tk share --serve  Local HTTP server"
+  echo ""
+  echo "Markdown:"
+  echo "  md <file>         Render markdown in browser (GFM + syntax highlighting)"
   echo ""
   echo "Multi-Project Commands:"
   echo "  @alias <cmd>      Run command against a specific project"
@@ -9042,6 +9052,178 @@ handle_court_command() {
 }
 
 # =============================================================================
+# Markdown Renderer
+# =============================================================================
+
+MD_ASSETS_VERSION="1"
+MD_ASSETS_DIR="$CONFIG_DIR/assets/md"
+
+md_show_help() {
+  echo -e "${CYAN}Markdown Renderer:${NC}"
+  echo ""
+  echo "Usage:"
+  echo "  crab md <file>              Render markdown file in browser"
+  echo "  crab md --update-assets     Re-download rendering libraries"
+  echo ""
+  echo "Renders any markdown file as a beautiful, self-contained HTML page"
+  echo "and opens it in your default browser. Supports GitHub-Flavored Markdown"
+  echo "with syntax-highlighted code blocks, tables, task lists, and dark mode."
+  echo ""
+  echo -e "${GRAY}Assets stored in: $MD_ASSETS_DIR${NC}"
+}
+
+md_ensure_assets() {
+  local version_file="$MD_ASSETS_DIR/.version"
+
+  # Check if assets exist and are current version
+  if [ -f "$version_file" ] && [ "$(cat "$version_file")" = "$MD_ASSETS_VERSION" ]; then
+    return 0
+  fi
+
+  echo -e "${CYAN}Downloading markdown rendering assets (one-time setup)...${NC}"
+  mkdir -p "$MD_ASSETS_DIR"
+
+  local base="https://cdn.jsdelivr.net/npm"
+  local failed=0
+
+  curl -fsSL "$base/marked@15/lib/marked.umd.min.js" -o "$MD_ASSETS_DIR/marked.min.js" || failed=1
+  curl -fsSL "$base/@highlightjs/cdn-assets@11/highlight.min.js" -o "$MD_ASSETS_DIR/highlight.min.js" || failed=1
+  curl -fsSL "$base/github-markdown-css@5/github-markdown.css" -o "$MD_ASSETS_DIR/github-markdown.css" || failed=1
+  curl -fsSL "$base/@highlightjs/cdn-assets@11/styles/github.min.css" -o "$MD_ASSETS_DIR/highlight-light.min.css" || failed=1
+  curl -fsSL "$base/@highlightjs/cdn-assets@11/styles/github-dark-dimmed.min.css" -o "$MD_ASSETS_DIR/highlight-dark.min.css" || failed=1
+
+  if [ "$failed" -eq 1 ]; then
+    error "Failed to download assets. Check your internet connection."
+    rm -rf "$MD_ASSETS_DIR"
+    return 1
+  fi
+
+  echo "$MD_ASSETS_VERSION" > "$version_file"
+  echo -e "${GREEN}Assets downloaded${NC}"
+}
+
+cmd_md() {
+  local file="${1:-}"
+
+  case "$file" in
+    ""|"-h"|"--help"|"help")
+      md_show_help
+      return 0
+      ;;
+    "--update-assets"|"--update")
+      rm -rf "$MD_ASSETS_DIR"
+      md_ensure_assets
+      return $?
+      ;;
+  esac
+
+  # Resolve to absolute path
+  if [[ "$file" != /* ]]; then
+    file="$(pwd)/$file"
+  fi
+
+  if [ ! -f "$file" ]; then
+    error "File not found: $file"
+    return 1
+  fi
+
+  md_ensure_assets || return 1
+
+  local filename
+  filename=$(basename "$file")
+  local tmp_html="/tmp/crab-md-${filename%.*}-$$.html"
+
+  # Base64-encode markdown content (atob handles line wraps fine)
+  local md_b64
+  md_b64=$(base64 < "$file")
+
+  # Generate self-contained HTML
+  # Uses: quoted heredocs for static parts, cat for asset files, echo for dynamic values
+  {
+    cat << 'MDHEAD'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+MDHEAD
+    echo "  <title>${filename}</title>"
+    echo "  <style>"
+    cat "$MD_ASSETS_DIR/github-markdown.css"
+    cat "$MD_ASSETS_DIR/highlight-light.min.css"
+    echo "@media (prefers-color-scheme: dark) {"
+    cat "$MD_ASSETS_DIR/highlight-dark.min.css"
+    echo "}"
+    cat << 'MDCSS'
+    body {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 45px 45px 80px;
+      background: #ffffff;
+    }
+    .markdown-body {
+      min-width: 200px;
+      max-width: 980px;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0d1117; }
+      .markdown-body {
+        --bgColor-default: #0d1117;
+        --fgColor-default: #e6edf3;
+      }
+    }
+    @media (max-width: 767px) {
+      body { padding: 15px 15px 60px; }
+    }
+    @media print {
+      body { max-width: none; padding: 0; }
+    }
+    </style>
+</head>
+<body>
+  <article class="markdown-body"></article>
+  <script>
+MDCSS
+    cat "$MD_ASSETS_DIR/marked.min.js"
+    echo "</script>"
+    echo "<script>"
+    cat "$MD_ASSETS_DIR/highlight.min.js"
+    echo "</script>"
+    echo "<script>"
+    cat << MDSCRIPT
+    marked.setOptions({
+      highlight:function(code,lang){
+        if(lang&&hljs.getLanguage(lang))return hljs.highlight(code,{language:lang}).value;
+        return hljs.highlightAuto(code).value;
+      },
+      gfm:true
+    });
+    var src=atob('${md_b64}');
+    document.querySelector('.markdown-body').innerHTML=marked.parse(src);
+    document.querySelectorAll('pre code').forEach(function(b){hljs.highlightElement(b);});
+MDSCRIPT
+    echo "</script>"
+    echo "</body>"
+    echo "</html>"
+  } > "$tmp_html"
+
+  # Open in browser
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    open "$tmp_html"
+  elif command_exists xdg-open; then
+    xdg-open "$tmp_html"
+  elif command_exists wslview; then
+    wslview "$tmp_html"
+  else
+    echo -e "Open in browser: ${BOLD}file://$tmp_html${NC}"
+    return 0
+  fi
+
+  echo -e "${GREEN}Rendered:${NC} $filename"
+  echo -e "${GRAY}$tmp_html${NC}"
+}
+
+# =============================================================================
 # Alias Management
 # =============================================================================
 
@@ -9229,6 +9411,10 @@ main() {
     "draw")
       # Collaborative Excalidraw sessions
       handle_draw_command "${@:2}"
+      ;;
+    "md"|"markdown")
+      # Render markdown file in browser
+      cmd_md "${@:2}"
       ;;
     "session"|"sessions")
       # Session management
