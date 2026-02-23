@@ -1583,19 +1583,51 @@
       <div class="bento-card large">
         <div class="icon">💬</div>
         <h3>Integrated Communications Layer</h3>
-        <p>Eliminate application context-switching with native Slack integration. Internal studies show 73% reduction in cognitive overhead and 156% improvement in cross-team alignment velocity.</p>
+        <p>Eliminate application context-switching with native Slack integration and peer-to-peer messaging. Internal studies show 73% reduction in cognitive overhead and 156% improvement in cross-team alignment velocity.</p>
         <div class="terminal-preview">
           <div><span class="prompt">$</span> <span class="command">crab slack @engineering-lead "deployment complete, SLAs nominal"</span></div>
           <div class="output">✓ Stakeholder notified (avg response time: 4.2min)</div>
-          <div><span class="prompt">$</span> <span class="command">crab slack #dev "🦀 feature shipped"</span></div>
-          <div class="output">✓ Posted to #dev</div>
+          <div><span class="prompt">$</span> <span class="command">crab msg @teammate "review ready on ws-3"</span></div>
+          <div class="output">✓ Delivered via P2P relay (text-to-speech: on)</div>
         </div>
+      </div>
+
+      <div class="bento-card large">
+        <div class="icon">🏛️</div>
+        <h3>Multi-Agent Code Review Tribunal</h3>
+        <p>Enterprise-grade pull request assurance via the judge pattern. Two independent AI reviewers analyze your PR in parallel. A judge orchestrator verifies every finding against actual code, resolves disagreements, and delivers a verdict with zero false positives. Organizations report 91% reduction in escaped defects and 68% faster review cycle times.</p>
+        <div class="terminal-preview">
+          <div><span class="prompt">$</span> <span class="command">crab court 3230</span></div>
+          <div class="output">⚖️  Assembling review tribunal...</div>
+          <div class="output">✓ Reviewer A (Claude): analyzing architecture impact</div>
+          <div class="output">✓ Reviewer B (Codex): analyzing implementation correctness</div>
+          <div class="output">✓ Judge: cross-referencing findings against source...</div>
+          <div class="output">✓ Verdict delivered. 0 false positives. <span class="command">Justice served. 🦀</span></div>
+        </div>
+      </div>
+
+      <div class="bento-card medium">
+        <div class="icon">🎫</div>
+        <h3>Ticket-Driven Development</h3>
+        <p>Connect workspaces directly to Linear tickets for automatic context injection. Branch naming, ticket metadata, and Claude context — all provisioned from a single identifier. Reduces ticket-to-first-commit latency by 76%.</p>
+      </div>
+
+      <div class="bento-card half">
+        <div class="icon">🌐</div>
+        <h3>Multi-Project Orchestration</h3>
+        <p>Manage unlimited repositories from a single crabcode installation. Per-project configs at <code>~/.crabcode/projects/</code> with automatic cwd-based detection. <code>crab @alias</code> targeting eliminates context confusion across portfolio workstreams.</p>
+      </div>
+
+      <div class="bento-card half">
+        <div class="icon">⌨️</div>
+        <h3>User-Configurable Command Aliases</h3>
+        <p>Define custom shorthand for frequently-used workflows via <code>crab alias set</code>. Reduce keystroke overhead by 62% for repetitive operations. Aliases persist globally across sessions and projects.</p>
       </div>
 
       <div class="bento-card half">
         <div class="icon">🔧</div>
         <h3>Accelerated Time-to-Productivity</h3>
-        <p><code>crab init</code> requires 2 inputs. <code>crab config scan</code> handles the rest. New engineers reach full productivity 37% faster. Scale your team without scaling onboarding overhead.</p>
+        <p><code>crab init</code> requires 3 inputs. <code>crab config scan</code> handles the rest. New engineers reach full productivity 37% faster. Scale your team without scaling onboarding overhead.</p>
       </div>
 
       <div class="bento-card half">
@@ -1633,8 +1665,8 @@
           <div class="metric-label">Eng Hours Saved/Quarter</div>
         </div>
         <div class="metric-item">
-          <div class="metric-value" data-target="89" data-suffix="%">0%</div>
-          <div class="metric-label">Fewer Config Incidents</div>
+          <div class="metric-value" data-target="91" data-suffix="%">0%</div>
+          <div class="metric-label">Fewer Escaped Defects</div>
         </div>
         <div class="metric-item">
           <div class="metric-value" data-target="2.3" data-prefix="$" data-suffix="M" data-decimals="1">$0M</div>
@@ -1778,6 +1810,10 @@
         <li><span class="check">✓</span> Zero-latency context-switching via git worktrees</li>
         <li><span class="check">✓</span> Automated resource allocation (89% fewer incidents)</li>
         <li><span class="check">✓</span> Stateful session continuity across failure domains</li>
+        <li><span class="check">✓</span> Multi-agent PR review tribunal with zero false positives</li>
+        <li><span class="check">✓</span> Ticket-to-workspace provisioning in under 3 seconds</li>
+        <li><span class="check">✓</span> Multi-project portfolio management from a single CLI</li>
+        <li><span class="check">✓</span> P2P developer messaging with text-to-speech delivery</li>
         <li><span class="check">✓</span> Quantifiable efficiency gains for quarterly business reviews</li>
         <li><span class="check">✓</span> 23% improvement in mean-time-to-resolution</li>
         <li><span class="check">✓</span> 37% faster new hire ramp-up</li>
@@ -1870,6 +1906,100 @@
         </div>
       </div>
     </div>
+
+    <div class="command-group">
+      <h3>P2P Messaging</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab msg @user "message"</code>
+          <p>Direct peer-to-peer message via self-hosted relay</p>
+        </div>
+        <div class="command-item">
+          <code>crab msg start</code>
+          <p>Provision relay server for team communication</p>
+        </div>
+        <div class="command-item">
+          <code>crab msg listen</code>
+          <p>Real-time message stream with text-to-speech delivery</p>
+        </div>
+        <div class="command-item">
+          <code>crab msg say on/off</code>
+          <p>Toggle audible notification for inbound messages</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-group">
+      <h3>Code Review Assurance</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab review &lt;PR&gt;</code>
+          <p>Quick single-agent PR analysis and assessment</p>
+        </div>
+        <div class="command-item">
+          <code>crab court &lt;PR&gt;</code>
+          <p>Multi-agent tribunal review with judge pattern</p>
+        </div>
+        <div class="command-item">
+          <code>crab review ls</code>
+          <p>Enumerate review sessions with status indicators</p>
+        </div>
+        <div class="command-item">
+          <code>crab review show &lt;PR&gt;</code>
+          <p>Retrieve saved review findings and verdict</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-group">
+      <h3>Ticket Integration</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab ticket &lt;ID&gt;</code>
+          <p>Provision workspace from Linear ticket with auto-context</p>
+        </div>
+        <div class="command-item">
+          <code>crab ws &lt;N&gt; ticket &lt;ID&gt;</code>
+          <p>Bind ticket context to specific workspace instance</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-group">
+      <h3>Multi-Project Management</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab @alias ws &lt;N&gt;</code>
+          <p>Target workspace operations to specific project</p>
+        </div>
+        <div class="command-item">
+          <code>crab projects</code>
+          <p>Enumerate registered projects with tmux session status</p>
+        </div>
+        <div class="command-item">
+          <code>crab default &lt;alias&gt;</code>
+          <p>Designate primary project for ambient command resolution</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="command-group">
+      <h3>Extensibility & Customization</h3>
+      <div class="command-grid">
+        <div class="command-item">
+          <code>crab alias set &lt;name&gt; &lt;cmd&gt;</code>
+          <p>Register persistent command shorthand</p>
+        </div>
+        <div class="command-item">
+          <code>crab alias</code>
+          <p>Enumerate configured aliases with resolution targets</p>
+        </div>
+        <div class="command-item">
+          <code>crab session resume &lt;name&gt;</code>
+          <p>Restore named Claude session with full context continuity</p>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- CRAB MOOD WIDGET -->
@@ -1942,7 +2072,7 @@
 
     // Typing effect for terminal
     const typingElements = document.querySelectorAll('.typing');
-    const commands = ['git status', 'crab restart', 'npm test', 'crab ws 2'];
+    const commands = ['crab restart', 'crab court 3230', 'crab ticket ENG-123', 'crab @pf ws 2', 'crab msg listen'];
     let cmdIndex = 0;
 
     function typeCommand() {
@@ -2329,6 +2459,52 @@
           { type: 'output', text: '📦 Creating archive...' },
           { type: 'output', text: '⬆️ Uploading...' },
           { type: 'output', text: '✓ https://transfer.sh/abc123' }
+        ]
+      },
+      'crab msg start': {
+        lines: [
+          { type: 'typed', text: '$ crab msg start' },
+          { type: 'output', text: '📡 Relay server starting...' },
+          { type: 'output', text: '✓ Listening on :9876' },
+          { type: 'output', text: '🦀 Ready for messages' }
+        ]
+      },
+      'crab review <PR>': {
+        lines: [
+          { type: 'typed', text: '$ crab review 3230' },
+          { type: 'output', text: '📋 Fetching PR context...' },
+          { type: 'output', text: '🤖 Claude reviewing...' },
+          { type: 'output', text: '✓ Review saved!' }
+        ]
+      },
+      'crab court <PR>': {
+        lines: [
+          { type: 'typed', text: '$ crab court 3230' },
+          { type: 'output', text: '⚖️ Assembling tribunal...' },
+          { type: 'output', text: '👨‍⚖️ Judge + 2 reviewers' },
+          { type: 'output', text: '✓ Verdict delivered 🦀' }
+        ]
+      },
+      'crab ticket <ID>': {
+        lines: [
+          { type: 'typed', text: '$ crab ticket ENG-123' },
+          { type: 'output', text: '🎫 Fetching ticket context...' },
+          { type: 'output', text: '→ Workspace 4 provisioned' },
+          { type: 'output', text: '✓ Claude has ticket context' }
+        ]
+      },
+      'crab projects': {
+        lines: [
+          { type: 'typed', text: '$ crab projects' },
+          { type: 'output', text: '  pf  promptfoo-cloud  [3 ws]' },
+          { type: 'output', text: '  cb  crabcode         [1 ws]' },
+          { type: 'output', text: '* pf (default)' }
+        ]
+      },
+      'crab alias set <name> <cmd>': {
+        lines: [
+          { type: 'typed', text: '$ crab alias set rr restart' },
+          { type: 'output', text: '✓ Alias set: rr → restart' }
         ]
       }
     };
