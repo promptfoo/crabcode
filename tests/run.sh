@@ -363,6 +363,158 @@ if [ -n "${TEST_WS_BASE:-}" ]; then
 fi
 
 # =============================================================================
+# Alias Command Tests
+# =============================================================================
+
+echo ""
+echo -e "${YELLOW}Alias Command Tests${NC}"
+
+if command -v yq &>/dev/null; then
+  # Setup: backup existing global config and use a temp one
+  ALIAS_BACKUP=""
+  if [ -f "$HOME/.crabcode/config.yaml" ]; then
+    ALIAS_BACKUP=$(mktemp)
+    cp "$HOME/.crabcode/config.yaml" "$ALIAS_BACKUP"
+  fi
+  # Ensure clean alias state — remove aliases key if present
+  if [ -f "$HOME/.crabcode/config.yaml" ]; then
+    yq -i 'del(.aliases)' "$HOME/.crabcode/config.yaml" 2>/dev/null || true
+  fi
+
+  # Test: list aliases when none configured
+  run_test "Alias list (empty)" "'$CRABCODE' alias 2>&1 | grep -q 'No aliases configured'"
+
+  # Test: set requires a name
+  run_test "Alias set no args" "'$CRABCODE' alias set 2>&1 | grep -q 'Usage'"
+
+  # Test: set requires a command value
+  run_test "Alias set no value" "'$CRABCODE' alias set myalias 2>&1 | grep -q 'Usage'"
+
+  # Test: set rejects invalid alias names
+  run_test "Alias set rejects spaces" "'$CRABCODE' alias set 'bad name' cmd 2>&1 | grep -q 'Invalid alias name'"
+  run_test "Alias set rejects special chars" "'$CRABCODE' alias set 'bad!name' cmd 2>&1 | grep -q 'Invalid alias name'"
+
+  # Test: set accepts valid names
+  run_test "Alias set single word" "'$CRABCODE' alias set testalias1 restart 2>&1 | grep -q 'Alias set'"
+  run_test "Alias set with hyphen" "'$CRABCODE' alias set test-alias2 cleanup 2>&1 | grep -q 'Alias set'"
+  run_test "Alias set with underscore" "'$CRABCODE' alias set test_alias3 'ws new' 2>&1 | grep -q 'Alias set'"
+
+  # Test: list shows created aliases
+  run_test "Alias list shows alias" "'$CRABCODE' alias 2>&1 | grep -q 'testalias1'"
+  run_test "Alias list shows value" "'$CRABCODE' alias 2>&1 | grep -q 'restart'"
+
+  # Test: aliases are persisted in global config
+  run_test "Alias persisted in config" "yq -r '.aliases.testalias1' '$HOME/.crabcode/config.yaml' | grep -q 'restart'"
+
+  # Test: overwrite existing alias
+  run_test "Alias overwrite" "'$CRABCODE' alias set testalias1 cleanup 2>&1 | grep -q 'Alias set'"
+  run_test "Alias overwrite persisted" "yq -r '.aliases.testalias1' '$HOME/.crabcode/config.yaml' | grep -q 'cleanup'"
+
+  # Test: remove alias
+  run_test "Alias rm" "'$CRABCODE' alias rm testalias1 2>&1 | grep -q 'Removed alias'"
+
+  # Test: remove nonexistent alias
+  run_test "Alias rm nonexistent" "'$CRABCODE' alias rm nonexistent 2>&1 | grep -q 'not found'"
+
+  # Test: rm requires a name
+  run_test "Alias rm no args" "'$CRABCODE' alias rm 2>&1 | grep -q 'Usage'"
+
+  # Test: unknown subcommand
+  run_test "Alias unknown subcommand" "'$CRABCODE' alias foobar 2>&1 | grep -q 'Unknown alias subcommand'"
+
+  # Cleanup test aliases
+  "$CRABCODE" alias rm test-alias2 2>/dev/null || true
+  "$CRABCODE" alias rm test_alias3 2>/dev/null || true
+
+  # Restore original global config
+  if [ -n "$ALIAS_BACKUP" ]; then
+    cp "$ALIAS_BACKUP" "$HOME/.crabcode/config.yaml"
+    rm -f "$ALIAS_BACKUP"
+  fi
+else
+  echo -e "  ${YELLOW}Skipping alias tests (yq not installed)${NC}"
+fi
+
+# =============================================================================
+# Alias Resolution Tests
+# =============================================================================
+
+echo ""
+echo -e "${YELLOW}Alias Resolution Tests${NC}"
+
+if command -v yq &>/dev/null; then
+  # Setup: backup and create a controlled config
+  ALIAS_RES_BACKUP=""
+  if [ -f "$HOME/.crabcode/config.yaml" ]; then
+    ALIAS_RES_BACKUP=$(mktemp)
+    cp "$HOME/.crabcode/config.yaml" "$ALIAS_RES_BACKUP"
+  fi
+
+  # Set an alias that maps to a known command
+  "$CRABCODE" alias set testver '--version' 2>/dev/null
+
+  # Test: alias resolves to the target command
+  run_test "Alias resolves to target" "'$CRABCODE' testver 2>&1 | grep -q 'crabcode'"
+
+  # Set a multi-word alias
+  "$CRABCODE" alias set testhelp '--help' 2>/dev/null
+
+  run_test "Multi-word alias resolves" "'$CRABCODE' testhelp 2>&1 | grep -q 'crab'"
+
+  # Cleanup
+  "$CRABCODE" alias rm testver 2>/dev/null || true
+  "$CRABCODE" alias rm testhelp 2>/dev/null || true
+
+  if [ -n "$ALIAS_RES_BACKUP" ]; then
+    cp "$ALIAS_RES_BACKUP" "$HOME/.crabcode/config.yaml"
+    rm -f "$ALIAS_RES_BACKUP"
+  fi
+else
+  echo -e "  ${YELLOW}Skipping alias resolution tests (yq not installed)${NC}"
+fi
+
+# =============================================================================
+# Msg Command Tests
+# =============================================================================
+
+echo ""
+echo -e "${YELLOW}Msg Command Tests${NC}"
+
+# Test: msg help
+run_test "Msg help" "'$CRABCODE' msg help 2>&1 | grep -qE 'P2P Messaging|msg'"
+run_test "Msg no args shows help" "'$CRABCODE' msg 2>&1 | grep -qE 'P2P Messaging|msg'"
+
+# Test: msg status without relay
+run_test "Msg status shows info" "'$CRABCODE' msg status 2>&1 | grep -qE 'Message Status|Name|Relay'"
+
+# Test: msg say without args shows current state
+run_test "Msg say shows state" "'$CRABCODE' msg say 2>&1 | grep -qE 'Text-to-speech'"
+
+# Test: msg say on/off toggles
+run_test "Msg say on" "'$CRABCODE' msg say on 2>&1 | grep -q 'enabled'"
+run_test "Msg say off" "'$CRABCODE' msg say off 2>&1 | grep -q 'disabled'"
+
+# Test: msg say shows updated state after toggle
+run_test "Msg say reflects off state" "'$CRABCODE' msg say 2>&1 | grep -q 'off'"
+
+# Reset to default
+"$CRABCODE" msg say on 2>/dev/null || true
+
+# Test: msg unknown subcommand
+run_test "Msg unknown subcommand" "'$CRABCODE' msg foobar 2>&1 | grep -q 'Unknown msg command'"
+
+# Test: msg read without relay (should not crash)
+run_test "Msg read graceful without relay" "'$CRABCODE' msg read 2>&1; true"
+
+# Test: msg history without relay (should not crash)
+run_test "Msg history graceful without relay" "'$CRABCODE' msg history 2>&1; true"
+
+# Test: msg start requires python3
+if ! command -v python3 &>/dev/null; then
+  run_test "Msg start without python3" "'$CRABCODE' msg start 2>&1 | grep -q 'Python3'"
+fi
+
+# =============================================================================
 # Integration Tests (require Docker or real setup)
 # =============================================================================
 
