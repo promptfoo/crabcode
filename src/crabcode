@@ -1725,7 +1725,7 @@ cleanup_workspace() {
   git fetch origin
 
   echo "  Resetting to origin/main..."
-  git checkout main 2>/dev/null || git checkout -b main origin/main
+  git checkout -f main 2>/dev/null || git checkout -f -B main origin/main
   git reset --hard origin/main
 
   echo "  Cleaning untracked files..."
@@ -1833,7 +1833,7 @@ restart_workspace() {
 
   if [ "$current_branch" != "$branch_name" ]; then
     echo "  Switching from $current_branch to $branch_name..."
-    git checkout "$branch_name" 2>/dev/null || git checkout -b "$branch_name"
+    git checkout -f "$branch_name" 2>/dev/null || git checkout -f -B "$branch_name"
   fi
 
   echo "  Resetting $branch_name to origin/main content..."
