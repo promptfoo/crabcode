@@ -2818,11 +2818,16 @@ _restore_wip() {
 
   cd "$dir"
 
-  # Switch to saved branch
+  # Use workspace's own branch when restoring cross-workspace, otherwise
+  # use the saved branch so we land on the exact same branch as before.
   local current_branch=$(git branch --show-current)
-  if [ "$current_branch" != "$saved_branch" ] && [ -n "$saved_branch" ]; then
-    echo "  Switching to branch $saved_branch..."
-    git checkout "$saved_branch" 2>/dev/null || git checkout -b "$saved_branch"
+  local target_branch="$saved_branch"
+  if [ "$saved_branch" != "$branch_name" ]; then
+    target_branch="$branch_name"
+  fi
+  if [ "$current_branch" != "$target_branch" ] && [ -n "$target_branch" ]; then
+    echo "  Switching to branch $target_branch..."
+    git checkout "$target_branch" 2>/dev/null || git checkout -b "$target_branch"
   fi
 
   # Cherry-pick saved commits (handle both main-commits.txt and cloud-commits.txt)
