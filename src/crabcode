@@ -9554,17 +9554,15 @@ main() {
           wip_save "$num" "$do_restart" "$custom_name"
           ;;
         "ls"|"list")
-          # List is global by default, unless --ws flag or physically in workspace
+          # List is project-level by default, unless --ws flag
           local dir_ws=$(detect_workspace_from_dir)
           if [ "${3:-}" = "--ws" ] && [ -n "$num" ]; then
             # Explicitly request workspace-specific list
             wip_list "$num"
-          elif [ -n "$dir_ws" ] && [ "${3:-}" != "--all" ] && [ "${3:-}" != "-a" ]; then
-            # Physically in workspace directory, show workspace-specific
+          elif [ "${3:-}" = "--ws" ] && [ -n "$dir_ws" ]; then
             wip_list "$dir_ws"
-            echo -e "${GRAY}Use 'crab wip ls --all' to see all workspaces${NC}"
           else
-            # Global view (default when not physically in workspace)
+            # Project-level view (default)
             wip_list_global
           fi
           ;;
@@ -9596,6 +9594,11 @@ main() {
                 ;;
             esac
           done
+
+          # Default to current workspace if no --to specified
+          if [ -z "$target_ws" ] && [ -n "$num" ]; then
+            target_ws="$num"
+          fi
 
           if [ -z "$index" ]; then
             # Interactive restore
