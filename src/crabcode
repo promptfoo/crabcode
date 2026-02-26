@@ -1510,9 +1510,12 @@ EOF
         sleep 0.3
         [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "$dev_cmd" C-m
 
-        tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
-        sleep 0.5
-        [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "clear && $claude_cmd" C-m
+        if [ -n "$claude_cmd" ]; then
+          # Run command via respawn-pane shell arg to avoid zsh init prompts eating keystrokes
+          tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir" "$claude_cmd; exec $SHELL"
+        else
+          tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
+        fi
 
         success "Workspace $num started with ticket prompt"
       else
@@ -1962,9 +1965,12 @@ continue_workspace() {
     sleep 0.3
     [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "$dev_cmd" C-m
 
-    tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
-    sleep 0.5
-    [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "clear && $claude_cmd" C-m
+    if [ -n "$claude_cmd" ]; then
+      # Run command via respawn-pane shell arg to avoid zsh init prompts eating keystrokes
+      tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir" "$claude_cmd; exec $SHELL"
+    else
+      tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
+    fi
 
     success "Workspace $num continued with previous session"
   else
