@@ -9139,7 +9139,7 @@ cmd_md() {
   filename=$(basename "$file")
   local tmp_html="/tmp/crab-md-${filename%.*}-$$.html"
 
-  # Base64-encode markdown content (atob handles line wraps fine)
+  # Base64-encode markdown content; decoded via atob + TextDecoder for UTF-8 support
   local md_b64
   md_b64=$(base64 < "$file")
 
@@ -9204,7 +9204,10 @@ MDCSS
       },
       gfm:true
     });
-    var src=atob('${md_b64}');
+    var bin=atob('${md_b64}');
+    var bytes=new Uint8Array(bin.length);
+    for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+    var src=new TextDecoder('utf-8').decode(bytes);
     document.querySelector('.markdown-body').innerHTML=marked.parse(src);
     document.querySelectorAll('pre code').forEach(function(b){hljs.highlightElement(b);});
 MDSCRIPT
