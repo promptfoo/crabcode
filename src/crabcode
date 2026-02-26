@@ -9170,12 +9170,14 @@ MDHEAD
     body {
       max-width: 980px;
       margin: 0 auto;
-      padding: 45px 45px 80px;
+      padding: 0;
       background: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     }
     .markdown-body {
       min-width: 200px;
       max-width: 980px;
+      padding: 24px 45px 80px;
     }
     @media (prefers-color-scheme: dark) {
       body { background: #0d1117; }
@@ -9185,15 +9187,95 @@ MDHEAD
       }
     }
     @media (max-width: 767px) {
-      body { padding: 15px 15px 60px; }
+      .markdown-body { padding: 15px 15px 60px; }
     }
     @media print {
       body { max-width: none; padding: 0; }
+      #md-toolbar { display: none; }
+    }
+    /* Toolbar */
+    #md-toolbar {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 16px;
+      background: #f6f8fa; border-bottom: 1px solid #d0d7de;
+      font-size: 14px;
+    }
+    #md-filename { font-weight: 600; color: #57606a; }
+    #md-toolbar button {
+      padding: 5px 16px; font-size: 14px; border-radius: 6px;
+      border: 1px solid rgba(27,31,36,0.15); cursor: pointer; margin-left: 8px;
+      font-weight: 500;
+    }
+    .btn-primary { background: #2ea44f !important; color: #fff !important; border-color: rgba(27,31,36,0.15) !important; }
+    .btn-primary:hover { background: #2c974b !important; }
+    .btn-default { background: #f6f8fa; color: #24292f; }
+    .btn-default:hover { background: #e1e4e8; }
+    @media (prefers-color-scheme: dark) {
+      #md-toolbar { background: #161b22; border-bottom-color: #30363d; }
+      #md-filename { color: #8b949e; }
+      .btn-default { background: #21262d; color: #c9d1d9; border-color: #30363d; }
+      .btn-default:hover { background: #30363d; }
+    }
+    /* Edit mode layout */
+    body.edit-mode { max-width: none; }
+    body.edit-mode #md-container { display: flex; height: calc(100vh - 45px); }
+    body.edit-mode #md-editor { display: flex !important; flex: 1; min-width: 0; border-right: 1px solid #d0d7de; }
+    body.edit-mode .markdown-body { flex: 1; min-width: 0; overflow-y: auto; padding: 24px 45px 80px; max-width: none; }
+    #md-source {
+      width: 100%; height: 100%; border: none; outline: none; resize: none;
+      padding: 24px; font-family: "SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+      font-size: 14px; line-height: 1.6; background: #fff; color: #24292f; tab-size: 4;
+    }
+    @media (prefers-color-scheme: dark) {
+      body.edit-mode #md-editor { border-right-color: #30363d; }
+      #md-source { background: #0d1117; color: #e6edf3; }
+    }
+    /* Diff highlights */
+    .diff-added {
+      background: rgba(46,160,67,0.15); border-left: 3px solid #2ea44f;
+      padding-left: 8px; margin-left: -11px;
+    }
+    .diff-changed {
+      background: rgba(210,153,34,0.15); border-left: 3px solid #d29922;
+      padding-left: 8px; margin-left: -11px;
+    }
+    @media (prefers-color-scheme: dark) {
+      .diff-added { background: rgba(46,160,67,0.1); }
+      .diff-changed { background: rgba(210,153,34,0.1); }
+    }
+    /* Diff legend */
+    #diff-legend {
+      display: none; padding: 8px 16px; font-size: 12px; color: #57606a;
+      border-bottom: 1px solid #d0d7de; background: #f6f8fa;
+    }
+    #diff-legend.visible { display: flex; gap: 16px; align-items: center; }
+    #diff-legend span { display: inline-flex; align-items: center; gap: 4px; }
+    #diff-legend .swatch { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+    @media (prefers-color-scheme: dark) {
+      #diff-legend { background: #161b22; border-bottom-color: #30363d; color: #8b949e; }
     }
     </style>
 </head>
 <body>
-  <article class="markdown-body"></article>
+  <div id="md-toolbar">
+    <span id="md-filename"></span>
+    <div>
+      <button id="btn-edit" class="btn-primary" title="Edit markdown">Edit</button>
+      <button id="btn-save" class="btn-primary" style="display:none" title="Download edited file">Save</button>
+      <button id="btn-cancel" class="btn-default" style="display:none" title="Exit edit mode">Cancel</button>
+    </div>
+  </div>
+  <div id="diff-legend">
+    <span><span class="swatch" style="background:#d29922"></span> Changed</span>
+    <span><span class="swatch" style="background:#2ea44f"></span> Added</span>
+  </div>
+  <div id="md-container">
+    <article class="markdown-body" id="md-preview"></article>
+    <div id="md-editor" style="display:none">
+      <textarea id="md-source" spellcheck="false"></textarea>
+    </div>
+  </div>
   <script>
 MDCSS
     cat "$MD_ASSETS_DIR/marked.min.js"
@@ -9214,9 +9296,121 @@ MDCSS
     var bytes=new Uint8Array(bin.length);
     for(var i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
     var src=new TextDecoder('utf-8').decode(bytes);
-    document.querySelector('.markdown-body').innerHTML=marked.parse(src);
-    document.querySelectorAll('pre code').forEach(function(b){hljs.highlightElement(b);});
+    window.__originalMd=src;
+    window.__currentMd=src;
+    document.getElementById('md-preview').innerHTML=marked.parse(src);
+    document.querySelectorAll('#md-preview pre code').forEach(function(b){hljs.highlightElement(b);});
+    document.getElementById('md-filename').textContent=document.title;
 MDSCRIPT
+    echo "</script>"
+    echo "<script>"
+    cat << 'MDEDITJS'
+(function(){
+  var preview=document.getElementById('md-preview');
+  var editor=document.getElementById('md-editor');
+  var source=document.getElementById('md-source');
+  var btnEdit=document.getElementById('btn-edit');
+  var btnSave=document.getElementById('btn-save');
+  var btnCancel=document.getElementById('btn-cancel');
+  var legend=document.getElementById('diff-legend');
+
+  function renderPreview(md,showDiff){
+    preview.innerHTML=marked.parse(md);
+    document.querySelectorAll('#md-preview pre code').forEach(function(b){hljs.highlightElement(b);});
+    if(showDiff) applyDiffHighlights();
+  }
+
+  function splitBlocks(text){
+    return text.split(/\n{2,}/).filter(function(b){return b.trim().length>0;});
+  }
+
+  function applyDiffHighlights(){
+    var origBlocks=splitBlocks(window.__originalMd);
+    var currBlocks=splitBlocks(window.__currentMd);
+    var children=preview.children;
+    var hasChanges=false;
+    // Walk through rendered children and mark changed/added blocks
+    var ci=0;
+    for(var i=0;i<children.length&&ci<Math.max(origBlocks.length,currBlocks.length);i++){
+      // Skip non-element nodes
+      if(children[i].nodeType!==1)continue;
+      if(ci>=origBlocks.length){
+        children[i].classList.add('diff-added');
+        hasChanges=true;
+      }else if(ci<currBlocks.length&&origBlocks[ci].trim()!==currBlocks[ci].trim()){
+        children[i].classList.add('diff-changed');
+        hasChanges=true;
+      }
+      ci++;
+    }
+    legend.className=hasChanges?'visible':'';
+  }
+
+  function enterEditMode(){
+    document.body.classList.add('edit-mode');
+    source.value=window.__currentMd;
+    btnEdit.style.display='none';
+    btnSave.style.display='';
+    btnCancel.style.display='';
+    legend.className='';
+    // Clear diff highlights for split view
+    Array.from(preview.children).forEach(function(el){
+      el.classList.remove('diff-added','diff-changed');
+    });
+    source.focus();
+  }
+
+  function exitEditMode(){
+    document.body.classList.remove('edit-mode');
+    btnEdit.style.display='';
+    btnSave.style.display='none';
+    btnCancel.style.display='none';
+    var hasChanges=window.__currentMd!==window.__originalMd;
+    renderPreview(window.__currentMd,hasChanges);
+  }
+
+  btnEdit.addEventListener('click',enterEditMode);
+  btnCancel.addEventListener('click',exitEditMode);
+
+  // Live preview with debounce
+  var timer;
+  source.addEventListener('input',function(){
+    clearTimeout(timer);
+    timer=setTimeout(function(){
+      window.__currentMd=source.value;
+      renderPreview(window.__currentMd,true);
+    },150);
+  });
+
+  // Save/download
+  btnSave.addEventListener('click',function(){
+    var content=window.__currentMd;
+    var blob=new Blob([content],{type:'text/markdown;charset=utf-8'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    var origName=document.title.replace(/\.[^.]+$/,'');
+    a.href=url;
+    a.download=origName+'.edited.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown',function(e){
+    if((e.metaKey||e.ctrlKey)&&e.key==='s'){
+      if(document.body.classList.contains('edit-mode')){
+        e.preventDefault();
+        btnSave.click();
+      }
+    }
+    if(e.key==='Escape'&&document.body.classList.contains('edit-mode')){
+      exitEditMode();
+    }
+  });
+})();
+MDEDITJS
     echo "</script>"
     echo "</body>"
     echo "</html>"
