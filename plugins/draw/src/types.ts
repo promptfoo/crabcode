@@ -107,3 +107,10 @@ export interface OpenOptions {
   tunnel?: string;
   port?: number;
 }
+
+export interface OpenFileOptions {
+  filePath: string;
+  collab?: boolean;
+  tunnel?: string;
+  port?: number;
+}

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { startSession } from './commands/start.js';
-import { openSession } from './commands/open.js';
+import { openSession, openFile } from './commands/open.js';
 import { listDrawSessions } from './commands/list.js';
 import { deleteDrawSession } from './commands/delete.js';
 import { resolveSession, loadSession } from './storage/sessions.js';
@@ -61,6 +61,7 @@ function showHelp(): void {
   console.log('  crab draw --no-tunnel               Start without sharing tunnel');
   console.log('  crab draw <session-id>              Reopen a saved session');
   console.log('  crab draw <session-id> --collab     Reopen with sharing enabled');
+  console.log('  crab draw open <path>               Open .excalidraw file or directory');
   console.log('  crab draw ls                        List all sessions');
   console.log('  crab draw delete <session-id>       Delete a session');
   console.log('');
@@ -121,6 +122,61 @@ async function main(): Promise<void> {
       return;
     }
     deleteDrawSession(projectRoot, resolved.id);
+    return;
+  }
+
+  // crab draw open <path> — open .excalidraw file or directory
+  if (command === 'open') {
+    const target = args[1];
+    if (!target) {
+      console.error('Usage: crab draw open <path>');
+      console.error('  <path> can be an .excalidraw file or a directory containing one.');
+      process.exit(1);
+    }
+
+    const resolvedPath = path.resolve(target);
+
+    let filePath: string;
+    try {
+      const stat = fs.statSync(resolvedPath);
+      if (stat.isDirectory()) {
+        // Look for .excalidraw files in the directory
+        const files = fs.readdirSync(resolvedPath).filter((f) => f.endsWith('.excalidraw'));
+        if (files.length === 0) {
+          console.error(`Error: No .excalidraw files found in ${resolvedPath}`);
+          process.exit(1);
+        }
+        // Prefer "drawing.excalidraw" if it exists, otherwise use the only file or error
+        const preferred = files.find((f) => f === 'drawing.excalidraw');
+        if (preferred) {
+          filePath = path.join(resolvedPath, preferred);
+        } else if (files.length === 1) {
+          filePath = path.join(resolvedPath, files[0]);
+        } else {
+          console.error(`Error: Multiple .excalidraw files found in ${resolvedPath}:`);
+          files.forEach((f) => console.error(`  ${f}`));
+          console.error('Specify the file directly: crab draw open <path/file.excalidraw>');
+          process.exit(1);
+        }
+      } else {
+        filePath = resolvedPath;
+      }
+    } catch {
+      console.error(`Error: Path not found: ${resolvedPath}`);
+      process.exit(1);
+    }
+
+    if (!filePath.endsWith('.excalidraw')) {
+      console.error(`Error: Not an .excalidraw file: ${filePath}`);
+      process.exit(1);
+    }
+
+    await openFile({
+      filePath,
+      collab: hasFlag(args, '--collab'),
+      tunnel: getArg(args, '--tunnel'),
+      port: getArg(args, '--port') ? parseInt(getArg(args, '--port')!) : undefined,
+    });
     return;
   }
 
