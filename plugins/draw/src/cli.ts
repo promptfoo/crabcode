@@ -212,14 +212,12 @@ async function main(): Promise<void> {
     }
   }
 
-  // crab draw [--title "..."] — new session
-  // If command looks like a session name but doesn't match, warn
-  if (command && !command.startsWith('-')) {
-    console.error(`No session matching "${command}". Starting new session instead.\n`);
-  }
+  // crab draw [--title "..."] or crab draw "title" — new session
+  // Positional arg that didn't match a session ID is used as the title
+  const title = getArg(args, '--title', '-t') || (command && !command.startsWith('-') ? command : undefined);
 
   await startSession(projectRoot, {
-    title: getArg(args, '--title', '-t'),
+    title,
     collab: !hasFlag(args, '--no-tunnel'),
     tunnel: getArg(args, '--tunnel'),
     port: getArg(args, '--port') ? parseInt(getArg(args, '--port')!) : undefined,
