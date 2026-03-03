@@ -95,7 +95,7 @@ export async function openSession(projectRoot: string, opts: OpenOptions): Promi
     httpServer.close();
     if (tunnel) tunnel.close();
 
-    console.log(`Session saved to .crab/draw/${opts.sessionId}/`);
+    console.log(`Session saved: ${opts.sessionId}`);
     process.exit(0);
   };
 

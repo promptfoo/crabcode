@@ -73,8 +73,8 @@ function showHelp(): void {
   console.log('  --port <port>          Use specific port (default: auto from 7220)');
   console.log('  --help, -h             Show this help');
   console.log('');
-  console.log('Sessions are saved to .crab/draw/ in your project directory.');
-  console.log('Commit them to git so teammates can access them with the same commands.');
+  console.log('Sessions are saved globally to ~/.crabcode/draw/.');
+  console.log('They are shared across all workspaces in the same project.');
 }
 
 async function main(): Promise<void> {

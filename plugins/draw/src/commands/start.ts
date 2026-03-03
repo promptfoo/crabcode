@@ -112,8 +112,7 @@ export async function startSession(projectRoot: string, opts: StartOptions): Pro
     httpServer.close();
     if (tunnel) tunnel.close();
 
-    console.log(`Session saved to .crab/draw/${sessionId}/`);
-    console.log(`  Drawing: .crab/draw/${sessionId}/drawing.excalidraw`);
+    console.log(`Session saved: ${sessionId}`);
     console.log(`  Reopen:  crab draw ${sessionId}\n`);
 
     process.exit(0);

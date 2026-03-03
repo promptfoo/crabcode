@@ -1,9 +1,13 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { DrawSession, ExcalidrawElement } from '../types.js';
 
-function drawDir(projectRoot: string): string {
-  return path.join(projectRoot, '.crab', 'draw');
+function drawDir(_projectRoot: string): string {
+  const configDir = process.env.CRAB_CONFIG_DIR || path.join(os.homedir(), '.crabcode');
+  const projectAlias = process.env.CRAB_PROJECT_ALIAS;
+  const base = path.join(configDir, 'draw');
+  return projectAlias ? path.join(base, projectAlias) : base;
 }
 
 function sessionDir(projectRoot: string, id: string): string {
