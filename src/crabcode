@@ -7599,7 +7599,7 @@ handle_draw_command() {
         draw_help
       else
         # No args = start new session
-        CRAB_PROJECT_ROOT="${REPO_PATH:-$(pwd)}" CRAB_CONFIG_DIR="$CONFIG_DIR" CRAB_PROJECT_ALIAS="$PROJECT_ALIAS" node "$PLUGIN_DIR/dist/cli.js" "$@"
+        CRAB_PROJECT_ROOT="${REPO_PATH:-$(pwd)}" CRAB_CONFIG_DIR="$CONFIG_DIR" node "$PLUGIN_DIR/dist/cli.js" "$@"
       fi
       ;;
     *)
@@ -7614,7 +7614,7 @@ handle_draw_command() {
         return 1
       fi
       # Pass all args to the Node.js CLI
-      CRAB_PROJECT_ROOT="${REPO_PATH:-$(pwd)}" CRAB_CONFIG_DIR="$CONFIG_DIR" CRAB_PROJECT_ALIAS="$PROJECT_ALIAS" node "$PLUGIN_DIR/dist/cli.js" "$@"
+      CRAB_PROJECT_ROOT="${REPO_PATH:-$(pwd)}" CRAB_CONFIG_DIR="$CONFIG_DIR" node "$PLUGIN_DIR/dist/cli.js" "$@"
       ;;
   esac
 }
