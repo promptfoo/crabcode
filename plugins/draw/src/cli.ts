@@ -5,7 +5,7 @@ import { startSession } from './commands/start.js';
 import { openSession, openFile } from './commands/open.js';
 import { listDrawSessions } from './commands/list.js';
 import { deleteDrawSession } from './commands/delete.js';
-import { resolveSession, loadSession } from './storage/sessions.js';
+import { resolveSession, loadSession, updateSessionMeta } from './storage/sessions.js';
 
 function getArg(args: string[], flag: string, short?: string): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -63,6 +63,7 @@ function showHelp(): void {
   console.log('  crab draw <session-id> --collab     Reopen with sharing enabled');
   console.log('  crab draw open <path>               Open .excalidraw file or directory');
   console.log('  crab draw ls                        List all sessions');
+  console.log('  crab draw rename <id> "New Title"    Rename a session');
   console.log('  crab draw delete <session-id>       Delete a session');
   console.log('');
   console.log('Options:');
@@ -93,6 +94,38 @@ async function main(): Promise<void> {
   // crab draw ls
   if (command === 'ls' || command === 'list') {
     listDrawSessions(projectRoot);
+    return;
+  }
+
+  // crab draw rename <id> "New Title"
+  if (command === 'rename' || command === 'mv') {
+    const input = args[1];
+    const newTitle = args[2];
+    if (!input || !newTitle) {
+      console.error('Usage: crab draw rename <session-id> "New Title"');
+      process.exit(1);
+    }
+    const resolved = resolveSession(projectRoot, input);
+    if (!resolved) {
+      console.error(`Session "${input}" not found.`);
+      process.exit(1);
+    }
+    if (resolved.ambiguous) {
+      try {
+        const chosen = await promptChoice(
+          `"${input}" matches multiple sessions:`,
+          projectRoot,
+          resolved.ambiguous,
+        );
+        updateSessionMeta(projectRoot, chosen, { title: newTitle });
+        console.log(`Renamed: ${chosen} → "${newTitle}"`);
+      } catch {
+        console.log('Cancelled.');
+      }
+      return;
+    }
+    updateSessionMeta(projectRoot, resolved.id, { title: newTitle });
+    console.log(`Renamed: ${resolved.id} → "${newTitle}"`);
     return;
   }
 
