@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "nanoid": "^5.0.0",
-    "open": "^10.0.0",
+    "open": "^11.0.0",
     "socket.io": "^4.8.0"
   },
   "devDependencies": {
