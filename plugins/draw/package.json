@@ -19,7 +19,7 @@
     "socket.io": "^4.8.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^24.0.0",
     "typescript": "^5.7.0"
   },
   "engines": {
