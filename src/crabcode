@@ -9070,6 +9070,333 @@ handle_court_command() {
 MD_ASSETS_VERSION="1"
 MD_ASSETS_DIR="$CONFIG_DIR/assets/md"
 
+COMPARE_ASSETS_VERSION="1"
+COMPARE_ASSETS_DIR="$CONFIG_DIR/assets/compare"
+
+compare_show_help() {
+  echo -e "${CYAN}File Compare:${NC}"
+  echo ""
+  echo "Usage:"
+  echo "  crab compare <file1> <file2>    Compare two files in browser"
+  echo "  crab compare --update-assets    Re-download rendering libraries"
+  echo ""
+  echo "Opens a beautiful side-by-side diff view in your default browser."
+  echo "Supports syntax highlighting and both unified and side-by-side modes."
+  echo ""
+  echo -e "${GRAY}Assets stored in: $COMPARE_ASSETS_DIR${NC}"
+}
+
+compare_ensure_assets() {
+  local version_file="$COMPARE_ASSETS_DIR/.version"
+
+  if [ -f "$version_file" ] && [ "$(cat "$version_file")" = "$COMPARE_ASSETS_VERSION" ]; then
+    return 0
+  fi
+
+  echo -e "${CYAN}Downloading compare rendering assets (one-time setup)...${NC}"
+  mkdir -p "$COMPARE_ASSETS_DIR"
+
+  local base="https://cdn.jsdelivr.net/npm"
+  local failed=0
+
+  curl -fsSL "$base/diff2html@3/bundles/css/diff2html.min.css" -o "$COMPARE_ASSETS_DIR/diff2html.min.css" || failed=1
+  curl -fsSL "$base/diff2html@3/bundles/js/diff2html-ui.min.js" -o "$COMPARE_ASSETS_DIR/diff2html-ui.min.js" || failed=1
+
+  if [ "$failed" -eq 1 ]; then
+    error "Failed to download assets. Check your internet connection."
+    rm -rf "$COMPARE_ASSETS_DIR"
+    return 1
+  fi
+
+  echo "$COMPARE_ASSETS_VERSION" > "$version_file"
+  echo -e "${GREEN}Assets downloaded${NC}"
+}
+
+cmd_compare() {
+  local file1="${1:-}"
+  local file2="${2:-}"
+
+  case "$file1" in
+    ""|"-h"|"--help"|"help")
+      compare_show_help
+      return 0
+      ;;
+    "--update-assets"|"--update")
+      rm -rf "$COMPARE_ASSETS_DIR"
+      compare_ensure_assets
+      return $?
+      ;;
+  esac
+
+  if [ -z "$file2" ]; then
+    error "Two file paths required."
+    echo ""
+    compare_show_help
+    return 1
+  fi
+
+  # Resolve to absolute paths
+  if [[ "$file1" != /* ]]; then
+    file1="$(pwd)/$file1"
+  fi
+  if [[ "$file2" != /* ]]; then
+    file2="$(pwd)/$file2"
+  fi
+
+  if [ ! -f "$file1" ]; then
+    error "File not found: $file1"
+    return 1
+  fi
+  if [ ! -f "$file2" ]; then
+    error "File not found: $file2"
+    return 1
+  fi
+
+  compare_ensure_assets || return 1
+
+  local name1 name2
+  name1=$(basename "$file1")
+  name2=$(basename "$file2")
+  local tmp_html="/tmp/crab-compare-${name1%.*}-${name2%.*}-$$.html"
+
+  # Generate unified diff (don't fail on differences)
+  local diff_output
+  diff_output=$(diff -u "$file1" "$file2" 2>/dev/null || true)
+
+  # If files are identical
+  if [ -z "$diff_output" ]; then
+    echo -e "${GREEN}Files are identical.${NC}"
+    return 0
+  fi
+
+  # Base64-encode the diff for safe embedding
+  local diff_b64
+  diff_b64=$(printf '%s' "$diff_output" | base64)
+
+  # Generate self-contained HTML
+  {
+    cat << 'CMPHEAD'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+CMPHEAD
+    echo "  <title>Compare: ${name1} ↔ ${name2}</title>"
+    echo "  <style>"
+    cat "$COMPARE_ASSETS_DIR/diff2html.min.css"
+    cat << 'CMPCSS'
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: #ffffff;
+      color: #24292f;
+    }
+    #cmp-toolbar {
+      position: sticky; top: 0; z-index: 100;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 20px;
+      background: #f6f8fa; border-bottom: 1px solid #d0d7de;
+      font-size: 14px;
+    }
+    #cmp-title {
+      font-weight: 600; color: #24292f; font-size: 15px;
+    }
+    #cmp-title .arrow { color: #57606a; margin: 0 6px; }
+    #cmp-toolbar .controls { display: flex; gap: 6px; align-items: center; }
+    #cmp-toolbar button {
+      padding: 5px 16px; font-size: 13px; border-radius: 6px;
+      border: 1px solid rgba(27,31,36,0.15); cursor: pointer;
+      font-weight: 500; background: #f6f8fa; color: #24292f;
+      transition: background 0.15s;
+    }
+    #cmp-toolbar button:hover { background: #e1e4e8; }
+    #cmp-toolbar button.active {
+      background: #0969da; color: #fff; border-color: #0969da;
+    }
+    #cmp-toolbar button.active:hover { background: #0860ca; }
+    .d2h-wrapper { padding: 0; }
+    .d2h-file-header { display: none; }
+    #cmp-stats {
+      font-size: 12px; color: #57606a; padding: 8px 20px;
+      background: #f6f8fa; border-bottom: 1px solid #d0d7de;
+    }
+    #cmp-stats .added { color: #1a7f37; font-weight: 600; }
+    #cmp-stats .removed { color: #cf222e; font-weight: 600; }
+
+    /*
+     * Eye-friendly diff palette — override diff2html CSS variables.
+     * Low saturation (~15%), minimal luminance shift for line backgrounds,
+     * gentle word highlights. Based on Solarized perceptual uniformity
+     * and WCAG guidelines for reducing visual fatigue.
+     */
+    :root {
+      /* Light mode: pastel tints, barely-there backgrounds */
+      --d2h-ins-bg-color: #eef6ee;
+      --d2h-ins-border-color: #d8e8d8;
+      --d2h-ins-highlight-bg-color: #d0e4d0;
+      --d2h-ins-label-color: #5a7a5a;
+      --d2h-del-bg-color: #f6eeee;
+      --d2h-del-border-color: #e8d8d8;
+      --d2h-del-highlight-bg-color: #e4d0d0;
+      --d2h-del-label-color: #7a5a5a;
+      --d2h-change-ins-color: #e8f0e8;
+      --d2h-change-del-color: #f0e8e4;
+      --d2h-info-bg-color: #eef2f8;
+      --d2h-info-border-color: #dce2ed;
+      --d2h-line-border-color: #e8eaed;
+
+      /* Dark mode */
+      --d2h-dark-bg-color: #1c2028;
+      --d2h-dark-color: #c8cdd5;
+      --d2h-dark-border-color: #2c3040;
+      --d2h-dark-dim-color: #5a6270;
+      --d2h-dark-line-border-color: #262a35;
+      --d2h-dark-file-header-bg-color: #20242e;
+      --d2h-dark-file-header-border-color: #2c3040;
+      --d2h-dark-empty-placeholder-bg-color: rgba(100,110,130,0.08);
+      --d2h-dark-empty-placeholder-border-color: #2c3040;
+      --d2h-dark-selected-color: rgba(80,130,190,0.10);
+      /* Additions: clearly green, not harsh */
+      --d2h-dark-ins-bg-color: rgba(50,200,80,0.18);
+      --d2h-dark-ins-border-color: rgba(50,200,80,0.25);
+      --d2h-dark-ins-highlight-bg-color: rgba(50,210,90,0.38);
+      --d2h-dark-ins-label-color: #4cc764;
+      /* Deletions: clearly red, not harsh */
+      --d2h-dark-del-bg-color: rgba(230,70,60,0.16);
+      --d2h-dark-del-border-color: rgba(230,70,60,0.25);
+      --d2h-dark-del-highlight-bg-color: rgba(235,80,70,0.35);
+      --d2h-dark-del-label-color: #e06060;
+      --d2h-dark-change-ins-color: rgba(50,200,80,0.20);
+      --d2h-dark-change-del-color: rgba(220,150,50,0.16);
+      --d2h-dark-info-bg-color: rgba(70,130,200,0.08);
+      --d2h-dark-info-border-color: rgba(70,130,200,0.15);
+      --d2h-dark-change-label-color: #a08a50;
+      --d2h-dark-moved-label-color: #5a8ab0;
+    }
+
+    /* Force dark scheme class based on system preference */
+    .d2h-file-header { display: none; }
+    .d2h-wrapper { padding: 0; }
+
+    #cmp-stats {
+      font-size: 12px; color: #57606a; padding: 8px 20px;
+      background: #f6f8fa; border-bottom: 1px solid #d0d7de;
+    }
+    #cmp-stats .added { color: #5a7a5a; font-weight: 600; }
+    #cmp-stats .removed { color: #7a5a5a; font-weight: 600; }
+
+    @media (prefers-color-scheme: dark) {
+      body { background: #1c2028; color: #c8cdd5; }
+      #cmp-toolbar { background: #20242e; border-bottom-color: #2c3040; }
+      #cmp-title { color: #c8cdd5; }
+      #cmp-title .arrow { color: #5a6270; }
+      #cmp-toolbar button { background: #282d38; color: #a0a8b5; border-color: #2c3040; }
+      #cmp-toolbar button:hover { background: #303848; }
+      #cmp-toolbar button.active { background: #3a5580; border-color: #3a5580; color: #d0d8e0; }
+      #cmp-stats { background: #20242e; border-bottom-color: #2c3040; color: #5a6270; }
+      #cmp-stats .added { color: #4cc764; }
+      #cmp-stats .removed { color: #e06060; }
+    }
+    </style>
+</head>
+<body>
+  <div id="cmp-toolbar">
+    <span id="cmp-title"></span>
+    <div class="controls">
+      <button id="btn-side" class="active" title="Side-by-side view">Side by Side</button>
+      <button id="btn-line" title="Unified line view">Unified</button>
+    </div>
+  </div>
+  <div id="cmp-stats"></div>
+  <div id="cmp-diff"></div>
+  <script>
+CMPCSS
+    cat "$COMPARE_ASSETS_DIR/diff2html-ui.min.js"
+    cat << CMPSCRIPT
+  </script>
+  <script>
+    var bin = atob('${diff_b64}');
+    var bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var diffString = new TextDecoder('utf-8').decode(bytes);
+
+    var name1 = '$(printf '%s' "$name1" | sed "s/'/\\\\'/g")';
+    var name2 = '$(printf '%s' "$name2" | sed "s/'/\\\\'/g")';
+
+    document.getElementById('cmp-title').innerHTML =
+      '<span>' + name1 + '</span><span class="arrow">↔</span><span>' + name2 + '</span>';
+
+    // Count additions/removals
+    var lines = diffString.split('\\n');
+    var added = 0, removed = 0;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].charAt(0) === '+' && !lines[i].startsWith('+++')) added++;
+      else if (lines[i].charAt(0) === '-' && !lines[i].startsWith('---')) removed++;
+    }
+    document.getElementById('cmp-stats').innerHTML =
+      '<span class="added">+' + added + ' additions</span>&nbsp;&nbsp;' +
+      '<span class="removed">-' + removed + ' removals</span>';
+
+    function renderDiff(outputFormat) {
+      var targetElement = document.getElementById('cmp-diff');
+      var configuration = {
+        drawFileList: false,
+        matching: 'lines',
+        outputFormat: outputFormat,
+        highlight: true,
+        colorScheme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+        renderNothingWhenEmpty: false
+      };
+      var diff2htmlUi = new Diff2HtmlUI(targetElement, diffString, configuration);
+      diff2htmlUi.draw();
+      diff2htmlUi.highlightCode();
+    }
+
+    // Re-render on system theme change
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+      var active = document.querySelector('#btn-side.active') ? 'side-by-side' : 'line-by-line';
+      renderDiff(active);
+    });
+
+    renderDiff('side-by-side');
+
+    var btnSide = document.getElementById('btn-side');
+    var btnLine = document.getElementById('btn-line');
+
+    btnSide.addEventListener('click', function() {
+      btnSide.classList.add('active');
+      btnLine.classList.remove('active');
+      renderDiff('side-by-side');
+    });
+    btnLine.addEventListener('click', function() {
+      btnLine.classList.add('active');
+      btnSide.classList.remove('active');
+      renderDiff('line-by-line');
+    });
+  </script>
+</body>
+</html>
+CMPSCRIPT
+  } > "$tmp_html"
+
+  # Open in browser
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    open "$tmp_html"
+  elif command_exists xdg-open; then
+    xdg-open "$tmp_html"
+  elif command_exists wslview; then
+    wslview "$tmp_html"
+  else
+    echo -e "Open in browser: ${BOLD}file://$tmp_html${NC}"
+    return 0
+  fi
+
+  echo -e "${GREEN}Comparing:${NC} $name1 ↔ $name2"
+  echo -e "${GRAY}$tmp_html${NC}"
+}
+
 md_show_help() {
   echo -e "${CYAN}Markdown Renderer:${NC}"
   echo ""
@@ -9560,7 +9887,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"msg"|"message"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"draw"|"session"|"review"|"court"|"ticket"|"tkt")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"msg"|"message"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"draw"|"compare"|"diff"|"session"|"review"|"court"|"ticket"|"tkt")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -9624,6 +9951,10 @@ main() {
     "md"|"markdown")
       # Render markdown file in browser
       cmd_md "${@:2}"
+      ;;
+    "compare"|"diff")
+      # Compare two files in browser
+      cmd_compare "${@:2}"
       ;;
     "session"|"sessions")
       # Session management
