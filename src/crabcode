@@ -88,12 +88,21 @@ get_agent_type() {
   echo "${agent:-claude}"
 }
 
-# Get the base agent command (interactive mode)
+# Get the base agent command (interactive mode, autonomous permissions)
 get_agent_base_cmd() {
   local agent=$(get_agent_type)
   case "$agent" in
     codex) echo "codex --full-auto" ;;
     claude|*) echo "claude --dangerously-skip-permissions" ;;
+  esac
+}
+
+# Get the agent command in safe/interactive mode (user approves each action)
+get_agent_safe_cmd() {
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "codex" ;;
+    claude|*) echo "claude" ;;
   esac
 }
 
@@ -10752,6 +10761,600 @@ handle_alias_command() {
 }
 
 # =============================================================================
+# Environment Snapshot & Restore
+# =============================================================================
+
+ENV_SNAPSHOT_DIR="$CONFIG_DIR/snapshots"
+
+# Quick pre-scan of the machine — gives the agent a head start
+_env_prescan() {
+  local info=""
+
+  # OS
+  info+="OS: $(uname -s) $(uname -r) ($(uname -m))\n"
+  info+="Hostname: $(hostname)\n"
+  info+="User: $(whoami)\n"
+  info+="Shell: ${SHELL:-unknown}\n"
+  info+="Home: $HOME\n"
+
+  # Package manager
+  if command_exists brew; then
+    info+="Package manager: Homebrew $(brew --version 2>/dev/null | head -1)\n"
+    info+="Brew formulas: $(brew list --formula 2>/dev/null | tr '\n' ', ')\n"
+    info+="Brew casks: $(brew list --cask 2>/dev/null | tr '\n' ', ')\n"
+    info+="Brew taps: $(brew tap 2>/dev/null | tr '\n' ', ')\n"
+    info+="Brew services: $(brew services list 2>/dev/null | tail -n +2 | tr '\n' '; ')\n"
+  fi
+  if command_exists apt; then
+    info+="Package manager: apt\n"
+  fi
+  if command_exists pacman; then
+    info+="Package manager: pacman\n"
+  fi
+
+  # Node / JS
+  if command_exists node; then
+    info+="Node: $(node --version 2>/dev/null)\n"
+  fi
+  if command_exists nvm; then
+    info+="nvm versions: $(ls "$HOME/.nvm/versions/node/" 2>/dev/null | tr '\n' ', ')\n"
+  elif [ -d "$HOME/.nvm/versions/node" ]; then
+    info+="nvm versions: $(ls "$HOME/.nvm/versions/node/" 2>/dev/null | tr '\n' ', ')\n"
+  fi
+  if command_exists npm; then
+    info+="npm globals: $(npm list -g --depth=0 2>/dev/null | tail -n +2 | sed 's/[├└─│ ]//g' | tr '\n' ', ')\n"
+    local linked=$(npm ls -g --link --depth=0 2>/dev/null | tail -n +2)
+    if [ -n "$linked" ]; then
+      info+="npm linked: $linked\n"
+    fi
+  fi
+  if command_exists pnpm; then
+    info+="pnpm: $(pnpm --version 2>/dev/null)\n"
+  fi
+  if command_exists yarn; then
+    info+="yarn: $(yarn --version 2>/dev/null)\n"
+  fi
+  if command_exists bun; then
+    info+="bun: $(bun --version 2>/dev/null)\n"
+  fi
+
+  # Python
+  if command_exists python3; then
+    info+="Python: $(python3 --version 2>/dev/null) ($(which python3))\n"
+  fi
+  if command_exists pyenv; then
+    info+="pyenv versions: $(pyenv versions --bare 2>/dev/null | tr '\n' ', ')\n"
+  fi
+  if command_exists pip3; then
+    info+="pip packages: $(pip3 list 2>/dev/null | tail -n +3 | awk '{print $1}' | tr '\n' ', ')\n"
+  fi
+
+  # Go, Rust, Ruby, Java
+  if command_exists go; then
+    info+="Go: $(go version 2>/dev/null)\n"
+  fi
+  if command_exists rustc; then
+    info+="Rust: $(rustc --version 2>/dev/null)\n"
+    if [ -d "$HOME/.cargo/bin" ]; then
+      info+="Cargo binaries: $(ls "$HOME/.cargo/bin/" 2>/dev/null | tr '\n' ', ')\n"
+    fi
+  fi
+  if command_exists ruby && [[ "$(which ruby)" != "/usr/bin/ruby" ]]; then
+    info+="Ruby: $(ruby --version 2>/dev/null)\n"
+  fi
+  if command_exists java; then
+    info+="Java: $(java --version 2>/dev/null | head -1)\n"
+  fi
+
+  # Databases
+  if command_exists psql; then
+    info+="PostgreSQL: $(psql --version 2>/dev/null)\n"
+    if pg_isready &>/dev/null; then
+      info+="PostgreSQL status: running\n"
+      info+="PostgreSQL databases: $(psql -l -t 2>/dev/null | awk -F'|' '{print $1}' | sed 's/^ *//' | grep -v '^$' | grep -v '^template' | tr '\n' ', ')\n"
+    else
+      info+="PostgreSQL status: not running\n"
+    fi
+  fi
+  if command_exists mysql; then
+    info+="MySQL: $(mysql --version 2>/dev/null)\n"
+  fi
+  if command_exists redis-cli; then
+    info+="Redis: $(redis-cli --version 2>/dev/null)\n"
+    if redis-cli ping &>/dev/null; then
+      info+="Redis status: running\n"
+    fi
+  fi
+  if command_exists mongosh; then
+    info+="MongoDB: $(mongosh --version 2>/dev/null)\n"
+  fi
+
+  # Docker
+  if command_exists docker; then
+    info+="Docker: $(docker --version 2>/dev/null)\n"
+    if docker info &>/dev/null; then
+      info+="Docker status: running\n"
+      local images=$(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -20 | tr '\n' ', ')
+      if [ -n "$images" ]; then
+        info+="Docker images: $images\n"
+      fi
+    fi
+  fi
+
+  # Cloud / infra
+  if command_exists gcloud; then
+    info+="gcloud: $(gcloud --version 2>/dev/null | head -1)\n"
+    info+="gcloud account: $(gcloud config get-value account 2>/dev/null)\n"
+    info+="gcloud project: $(gcloud config get-value project 2>/dev/null)\n"
+  fi
+  if command_exists aws; then
+    info+="AWS CLI: $(aws --version 2>/dev/null)\n"
+  fi
+  if command_exists kubectl; then
+    info+="kubectl: $(kubectl version --client --short 2>/dev/null || kubectl version --client 2>/dev/null | head -1)\n"
+  fi
+  if command_exists terraform; then
+    info+="Terraform: $(terraform --version 2>/dev/null | head -1)\n"
+  fi
+
+  # Git
+  if command_exists git; then
+    local git_user=$(git config --global user.name 2>/dev/null)
+    local git_email=$(git config --global user.email 2>/dev/null)
+    info+="Git user: $git_user <$git_email>\n"
+  fi
+  if command_exists gh; then
+    info+="GitHub CLI: $(gh --version 2>/dev/null | head -1)\n"
+    info+="GitHub auth: $(gh auth status 2>&1 | grep 'Logged in' | sed 's/^[ ]*//' || echo 'not authenticated')\n"
+  fi
+
+  # SSH
+  if [ -d "$HOME/.ssh" ]; then
+    info+="SSH dir contents: $(ls "$HOME/.ssh/" 2>/dev/null | tr '\n' ', ')\n"
+  fi
+
+  # Editors
+  if command_exists cursor; then
+    info+="Cursor: $(cursor --version 2>/dev/null | head -1)\n"
+  fi
+  if command_exists code; then
+    info+="VS Code: $(code --version 2>/dev/null | head -1)\n"
+  fi
+
+  # Terminals
+  if [ -f "$HOME/.config/ghostty/config" ]; then
+    info+="Ghostty: config exists\n"
+  fi
+  if [ -d "/Applications/iTerm.app" ]; then
+    info+="iTerm2: installed\n"
+  fi
+
+  # Security tools
+  if [ -d "/Applications/Burp Suite Professional.app" ]; then
+    info+="Burp Suite Professional: installed (requires license)\n"
+  elif [ -d "/Applications/Burp Suite Community Edition.app" ]; then
+    info+="Burp Suite Community: installed\n"
+  fi
+
+  # Tunneling
+  if command_exists ngrok; then
+    info+="ngrok: $(ngrok --version 2>/dev/null)\n"
+  fi
+  if command_exists cloudflared; then
+    info+="cloudflared: $(cloudflared --version 2>/dev/null | head -1)\n"
+  fi
+
+  # Shell extras
+  if [ -d "$HOME/.oh-my-zsh" ]; then
+    info+="oh-my-zsh: installed\n"
+    local plugins=$(grep '^plugins=' "$HOME/.zshrc" 2>/dev/null)
+    if [ -n "$plugins" ]; then
+      info+="oh-my-zsh config: $plugins\n"
+    fi
+    local theme=$(grep '^ZSH_THEME=' "$HOME/.zshrc" 2>/dev/null)
+    if [ -n "$theme" ]; then
+      info+="oh-my-zsh config: $theme\n"
+    fi
+  fi
+
+  # Applications (macOS)
+  if [ -d "/Applications" ]; then
+    info+="Applications: $(ls /Applications/ 2>/dev/null | sed 's/\.app$//' | tr '\n' ', ')\n"
+  fi
+
+  # Git repos
+  local repos=$(find "$HOME" -maxdepth 3 -name ".git" -type d 2>/dev/null | head -30 | sed "s|$HOME/||g; s|/\.git||g" | tr '\n' ', ')
+  if [ -n "$repos" ]; then
+    info+="Git repos found: $repos\n"
+  fi
+
+  # .env files
+  local envfiles=$(find "$HOME" -maxdepth 4 -name ".env" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -20 | sed "s|$HOME/||g" | tr '\n' ', ')
+  if [ -n "$envfiles" ]; then
+    info+=".env files: $envfiles\n"
+  fi
+
+  # Crabcode
+  if [ -d "$CONFIG_DIR" ]; then
+    info+="Crabcode config dir: $CONFIG_DIR\n"
+    if [ -d "$PROJECTS_DIR" ]; then
+      info+="Crabcode projects: $(ls "$PROJECTS_DIR" 2>/dev/null | tr '\n' ', ')\n"
+    fi
+  fi
+
+  # Claude
+  if command_exists claude; then
+    info+="Claude Code: $(claude --version 2>/dev/null)\n"
+  fi
+  if [ -d "$HOME/.claude" ]; then
+    info+="Claude config dir: ~/.claude\n"
+  fi
+
+  echo -e "$info"
+}
+
+handle_env_command() {
+  local cmd="${1:-}"
+  shift || true
+
+  case "$cmd" in
+    "snapshot")
+      env_snapshot "$@"
+      ;;
+    "restore")
+      env_restore "$@"
+      ;;
+    ""|"help"|"-h"|"--help")
+      echo -e "${BOLD}crab env${NC} - Environment snapshot & restore"
+      echo ""
+      echo -e "  ${CYAN}crab env snapshot${NC}              Capture environment recipe"
+      echo -e "  ${CYAN}crab env snapshot --dry-run${NC}    Preview what would be captured"
+      echo -e "  ${CYAN}crab env restore --from FILE${NC}   Restore from snapshot"
+      echo ""
+      echo "Snapshot launches an AI agent to explore your machine and build"
+      echo "a comprehensive environment recipe. The recipe + supporting files"
+      echo "are encrypted into a portable bundle for setting up a new machine."
+      ;;
+    *)
+      error "Unknown env command: $cmd"
+      echo "Run 'crab env help' for usage"
+      return 1
+      ;;
+  esac
+}
+
+env_snapshot() {
+  local dry_run="false"
+  local output_path=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run|-n)
+        dry_run="true"
+        shift
+        ;;
+      --output|-o)
+        output_path="${2:-}"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  echo -e "${CYAN}Scanning machine...${NC}"
+
+  # Quick pre-scan
+  local prescan
+  prescan=$(_env_prescan)
+
+  if [ "$dry_run" = "true" ]; then
+    echo -e "${BOLD}Pre-scan results:${NC}"
+    echo ""
+    echo "$prescan"
+    echo ""
+    echo -e "${GRAY}In a real snapshot, an AI agent would explore each of these"
+    echo -e "in depth and build a comprehensive recipe.${NC}"
+    return 0
+  fi
+
+  # Create staging directory
+  local timestamp=$(date +%Y%m%d-%H%M%S)
+  local staging_dir="$ENV_SNAPSHOT_DIR/staging-$timestamp"
+  mkdir -p "$staging_dir"
+
+  echo -e "${CYAN}Staging directory: $staging_dir${NC}"
+  echo -e "${CYAN}Launching agent to explore and build recipe...${NC}"
+  echo ""
+
+  # Write prescan to staging dir for the agent to reference
+  echo "$prescan" > "$staging_dir/prescan.txt"
+
+  # Write the agent prompt to a file
+  local prompt_file="$staging_dir/_prompt.md"
+  cat > "$prompt_file" <<PROMPT_EOF
+You are building an environment snapshot recipe for migrating to a new computer.
+Your job is to thoroughly explore this machine and produce a comprehensive recipe
+that a coding agent on a NEW machine can follow to recreate this dev environment.
+
+## What you have been given
+
+A pre-scan of this machine is at: $staging_dir/prescan.txt
+Read it first. It tells you what is installed and gives you starting points.
+
+## Your task
+
+1. **Explore deeply** - the pre-scan is surface-level. For each tool/service found:
+   - Check configs, versions, plugins, extensions, auth state
+   - Capture relevant config files into $staging_dir/configs/
+   - Check for custom settings that differ from defaults
+
+2. **Capture database schemas** - if databases are running:
+   - Dump roles: pg_dumpall --roles-only > $staging_dir/databases/postgres-roles.sql
+   - Dump schemas (no data): pg_dump -s <db> > $staging_dir/databases/<db>.sql
+   - Do this for every non-template database
+
+3. **Capture config files** - copy important dotfiles/configs into $staging_dir/configs/:
+   - Shell configs (.zshrc, .zprofile, .bashrc, etc.)
+   - Git config (.gitconfig, .gitignore_global if exists)
+   - SSH config (.ssh/config if exists - NOT private keys, those go in secrets)
+   - Terminal configs (ghostty, iterm, etc.)
+   - Editor settings (VS Code/Cursor settings.json, keybindings.json)
+   - Docker daemon.json
+   - Cloud tool configs (gcloud, aws, kube)
+   - Tool-specific configs (ngrok, cloudflared, etc.)
+   - Crabcode configs (~/.crabcode/projects/*.yaml, ~/.crabcode/config.yaml)
+   - Claude configs (~/.claude/)
+
+4. **Capture editor extensions** - save extension lists:
+   - code --list-extensions > $staging_dir/configs/vscode-extensions.txt (if installed)
+   - cursor --list-extensions > $staging_dir/configs/cursor-extensions.txt (if installed)
+
+5. **Build project inventory** - for each git repo found:
+   - Get the remote URL (git -C <path> remote get-url origin)
+   - Get current branch
+   - Note if it has .env files (do not copy them yet - those are secrets)
+   - Note worktree relationships (repos that share a common parent)
+   - Save to $staging_dir/projects/inventory.md
+
+6. **Collect secrets into $staging_dir/secrets/** (these will be encrypted):
+   - SSH private keys (~/.ssh/id_* or similar)
+   - .env files from projects (preserve directory structure info)
+   - API tokens from tool configs (ngrok authtoken, etc.)
+   - Cloud credentials (~/.aws/credentials, gcloud tokens)
+   - Docker registry auth (~/.docker/config.json if it has auths)
+   - Any other auth tokens you find in config files
+
+7. **Write the recipe** - create $staging_dir/recipe.md with:
+   - Phased setup order (foundation, runtimes, shell, git/auth, databases, projects, editors, manual steps)
+   - For each phase: what to install/configure, referencing the captured config files
+   - Directional guidance, not literal scripts - the agent on the new machine adapts
+   - Manual steps section: licensed software, app sign-ins, things that cannot be automated
+   - Any notes about non-obvious setup (worktree structures, symlinks, custom PATH entries, brew services that auto-start)
+
+## CRITICAL: Completeness rules
+
+The pre-scan below lists specific items found on this machine. You MUST handle EVERY item:
+
+- **Every .env file listed**: Copy ALL of them to $staging_dir/secrets/. Do not skip any.
+  Use the filename format: path_with_underscores_.env (e.g., Dev-Promptfoo_cloud2_.env)
+  Write a mapping file at $staging_dir/secrets/env-file-mapping.txt showing original paths.
+- **Every database listed**: Dump the schema for ALL of them. Do not skip any.
+- **Every git repo listed**: Include ALL of them in the project inventory. Do not skip any.
+- **Every tool/service listed**: Check its config and capture it. Do not skip any.
+
+After completing your work, review the pre-scan list one more time and confirm you handled every item. If you find you missed something, go back and capture it.
+
+## Important guidelines
+
+- Be thorough but smart - explore things the pre-scan surfaced, AND look for things it missed
+- The recipe.md is the PRIMARY artifact - it should be self-sufficient for an agent to follow
+- Config files in $staging_dir/configs/ are SUPPORTING evidence the new machine agent can reference
+- Secrets in $staging_dir/secrets/ will be encrypted separately - include them
+- Do not copy node_modules, build artifacts, caches, or .git directories
+- Do not copy entire applications - just note them for reinstallation
+- For databases, capture schemas only - not data (unless it is tiny seed data)
+- If a service is not running (e.g., postgres is installed but stopped), note that
+- If you find something unexpected or noteworthy, include it in the recipe
+
+## Pre-scan results from this machine
+
+$(cat "$staging_dir/prescan.txt")
+PROMPT_EOF
+
+  # Launch agent interactively with the prompt
+  cd "$HOME"
+  local agent_cmd=$(get_agent_base_cmd)
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) $agent_cmd --skip-git-repo-check -C "$staging_dir" "$(cat "$prompt_file")" ;;
+    claude|*) $agent_cmd "$prompt_file" ;;
+  esac
+  rm -f "$prompt_file"
+
+  # Check if recipe was created
+  if [ ! -f "$staging_dir/recipe.md" ]; then
+    warn "Agent did not create recipe.md — check $staging_dir for partial results"
+    echo -e "You can review what was captured and run the agent again."
+    return 1
+  fi
+
+  success "Recipe created at $staging_dir/recipe.md"
+  echo ""
+
+  # Let user review/edit the recipe before packaging
+  echo -e "${YELLOW}Review the recipe before packaging?${NC}"
+  read -p "Open recipe.md in editor? [Y/n]: " review_choice
+  if [[ ! "$review_choice" =~ ^[Nn]$ ]]; then
+    ${EDITOR:-vim} "$staging_dir/recipe.md"
+  fi
+
+  # Package and encrypt
+  echo ""
+  echo -e "${CYAN}Encrypting snapshot...${NC}"
+  echo -e "${GRAY}Choose a password to protect this snapshot.${NC}"
+  echo -e "${GRAY}You'll need this password on your new machine.${NC}"
+  echo ""
+
+  # Determine output path
+  if [ -z "$output_path" ]; then
+    output_path="$ENV_SNAPSHOT_DIR/env-snapshot-$timestamp.enc"
+  fi
+  mkdir -p "$(dirname "$output_path")"
+
+  # Encrypt with openssl (use pipefail to catch tar or openssl failures)
+  if ( set -o pipefail; tar czf - -C "$(dirname "$staging_dir")" "$(basename "$staging_dir")" \
+    | openssl enc -aes-256-cbc -pbkdf2 -salt -out "$output_path" ); then
+    # Clean up staging
+    rm -rf "$staging_dir"
+
+    local filesize=$(du -h "$output_path" | awk '{print $1}')
+    echo ""
+    success "Snapshot saved: $output_path ($filesize)"
+    echo ""
+    echo -e "  ${BOLD}To restore on a new machine:${NC}"
+    echo -e "  1. Transfer this file to the new machine"
+    echo -e "  2. Install crabcode: ${CYAN}curl -fsSL <install-url> | bash${NC}"
+    echo -e "  3. Run: ${CYAN}crab env restore --from $output_path${NC}"
+  else
+    error "Encryption failed"
+    echo "Unencrypted snapshot remains at: $staging_dir"
+    return 1
+  fi
+}
+
+env_restore() {
+  local from_path=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from|-f)
+        from_path="${2:-}"
+        shift 2
+        ;;
+      *)
+        # Treat bare argument as the path
+        if [ -z "$from_path" ]; then
+          from_path="$1"
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  if [ -z "$from_path" ]; then
+    error "Usage: crab env restore --from <path-or-url>"
+    return 1
+  fi
+
+  # Download if URL
+  local local_file="$from_path"
+  if [[ "$from_path" == http* ]]; then
+    echo -e "${CYAN}Downloading snapshot...${NC}"
+    local_file="/tmp/crab-env-snapshot-$$.enc"
+    curl -fsSL "$from_path" -o "$local_file" || {
+      error "Failed to download: $from_path"
+      return 1
+    }
+  fi
+
+  if [ ! -f "$local_file" ]; then
+    error "File not found: $local_file"
+    return 1
+  fi
+
+  # Decrypt
+  echo -e "${CYAN}Decrypting snapshot...${NC}"
+  local restore_dir="/tmp/crab-env-restore-$$"
+  mkdir -p "$restore_dir"
+
+  if ! ( set -o pipefail; openssl enc -d -aes-256-cbc -pbkdf2 -in "$local_file" \
+    | tar xzf - -C "$restore_dir" --strip-components=1 ); then
+    error "Decryption failed — wrong password?"
+    rm -rf "$restore_dir"
+    return 1
+  fi
+
+  # Clean up downloaded file
+  if [[ "$from_path" == http* ]]; then
+    rm -f "$local_file"
+  fi
+
+  # Verify recipe exists
+  if [ ! -f "$restore_dir/recipe.md" ]; then
+    error "Invalid snapshot — recipe.md not found"
+    echo "Contents of snapshot:"
+    ls -la "$restore_dir/"
+    return 1
+  fi
+
+  # Show recipe summary
+  echo ""
+  success "Snapshot decrypted to $restore_dir"
+  echo ""
+  echo -e "${BOLD}Recipe summary:${NC}"
+  head -40 "$restore_dir/recipe.md"
+  echo -e "${GRAY}...${NC}"
+  echo ""
+
+  # Ask to launch agent
+  echo -e "${YELLOW}Launch coding agent to set up this machine?${NC}"
+  read -p "Start setup? [Y/n]: " start_choice
+  if [[ "$start_choice" =~ ^[Nn]$ ]]; then
+    echo ""
+    echo "Recipe available at: $restore_dir/recipe.md"
+    echo "Run manually: $(get_agent_safe_cmd) $restore_dir/recipe.md"
+    return 0
+  fi
+
+  # Write restore prompt to file
+  local prompt_file="$restore_dir/_restore-prompt.md"
+  cat > "$prompt_file" <<RESTORE_EOF
+You are setting up a new development machine from an environment recipe.
+
+The recipe is at: $restore_dir/recipe.md
+Supporting config files are in: $restore_dir/configs/
+Database schemas are in: $restore_dir/databases/ (if any)
+Secrets are in: $restore_dir/secrets/ (SSH keys, .env files, tokens)
+Project inventory is at: $restore_dir/projects/inventory.md (if any)
+
+## Instructions
+
+1. Read recipe.md thoroughly first
+2. Work through each phase in order
+3. For each step:
+   - Tell me what you are about to do
+   - Ask for confirmation before major installs or config changes
+   - Use the supporting config files as reference (copy them to the right locations)
+   - Adapt commands to this machine OS and architecture
+4. For secrets:
+   - Place SSH keys in ~/.ssh/ with correct permissions (600 for keys, 700 for dir)
+   - Place .env files in their respective project directories
+   - Restore API tokens to their config files
+5. For manual steps - tell me what I need to do myself (app sign-ins, licenses, etc.)
+6. After setup, run a quick verification - check that key tools work
+
+Take it phase by phase.
+RESTORE_EOF
+
+  # Launch agent with the restore context (safe mode — no auto-approve
+  # because restore actually modifies the system — user should approve changes)
+  cd "$HOME"
+  local agent_cmd=$(get_agent_safe_cmd)
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) $agent_cmd --skip-git-repo-check -C "$restore_dir" "$(cat "$prompt_file")" ;;
+    claude|*) $agent_cmd "$prompt_file" ;;
+  esac
+  rm -f "$prompt_file"
+
+  echo ""
+  echo -e "${GRAY}Restore session complete. Snapshot files remain at: $restore_dir${NC}"
+  echo -e "${GRAY}You can delete them with: rm -rf $restore_dir${NC}"
+}
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -10841,6 +11444,10 @@ main() {
     "compare"|"diff")
       # Compare two files in browser
       cmd_compare "${@:2}"
+      ;;
+    "env")
+      # Environment snapshot & restore
+      handle_env_command "${@:2}"
       ;;
     "session"|"sessions")
       # Session management
