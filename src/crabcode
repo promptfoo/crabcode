@@ -71,6 +71,11 @@ command_exists() {
   command -v "$1" &>/dev/null
 }
 
+# Treat "n" and "no" as explicit negative responses.
+is_negative_response() {
+  [[ "$1" =~ ^[Nn]([Oo])?$ ]]
+}
+
 # =============================================================================
 # Agent Abstraction Layer
 # =============================================================================
@@ -8835,14 +8840,10 @@ review_quick() {
   local sessions_dir=$(get_sessions_dir)
   if [ -d "$sessions_dir/$name" ]; then
     echo -e "${YELLOW}Review session already exists: $name${NC}"
-    read -p "Resume it? [Y/n] " resume
-    if [[ ! "$resume" =~ ^[Nn]$ ]]; then
+    read -r -p "Resume it? [Y/n] " resume
+    if ! is_negative_response "$resume"; then
       session_resume "$name"
       return
-    fi
-    read -p "Start fresh? (deletes existing session) [Y/n] " fresh
-    if [[ "$fresh" =~ ^[Nn]$ ]]; then
-      return 1
     fi
     rm -rf "$sessions_dir/$name"
     echo -e "${GREEN}Deleted existing session. Starting fresh...${NC}"
@@ -8965,14 +8966,10 @@ review_court() {
   local sessions_dir=$(get_sessions_dir)
   if [ -d "$sessions_dir/$name" ]; then
     echo -e "${YELLOW}Court review session already exists: $name${NC}"
-    read -p "Resume it? [Y/n] " resume
-    if [[ ! "$resume" =~ ^[Nn]$ ]]; then
+    read -r -p "Resume it? [Y/n] " resume
+    if ! is_negative_response "$resume"; then
       session_resume "$name"
       return
-    fi
-    read -p "Start fresh? (deletes existing session) [Y/n] " fresh
-    if [[ "$fresh" =~ ^[Nn]$ ]]; then
-      return 1
     fi
     rm -rf "$sessions_dir/$name"
     echo -e "${GREEN}Deleted existing session. Starting fresh...${NC}"
