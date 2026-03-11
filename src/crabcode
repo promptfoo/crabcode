@@ -2546,7 +2546,7 @@ wip_list() {
       [ -z "$cs" ] && cs=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
       local saved_agent=$(grep -o '"agent"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"agent"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
       [ -z "$saved_agent" ] && saved_agent="claude"
-      local agent_label="${saved_agent^}"
+      local agent_label=$(echo "$saved_agent" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
       [ -n "$cs" ] && session_tag="  ${CYAN}${agent_label}: saved${NC}"
 
       echo -e "  ${GREEN}[$i]${NC} $name"
@@ -2647,7 +2647,7 @@ wip_list_global() {
       [ -z "$agent_sess" ] && agent_sess=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
       local saved_agent=$(grep -o '"agent"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"agent"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
       [ -z "$saved_agent" ] && saved_agent="claude"
-      local agent_label="${saved_agent^}"
+      local agent_label=$(echo "$saved_agent" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
       [ -n "$agent_sess" ] && session_tag="  ${CYAN}${agent_label}: saved${NC}"
 
       echo -e "      ${GRAY}Workspace: ${NC}$ws_num  ${GRAY}Branch: ${NC}$branch  ${GRAY}Files: ${NC}$file_count patches${session_tag}"
