@@ -7,7 +7,7 @@
   <      >
 ```
 
-A lightning-fast tmux-based workspace manager for multi-repo development. Manage multiple projects, start full dev environments in seconds.
+A lightning-fast tmux-based workspace manager for multi-repo development. Agent-agnostic — works with both [Claude Code](https://claude.ai/code) and [Codex CLI](https://github.com/openai/codex). Manage multiple projects, start full dev environments in seconds.
 
 ## Quick Start
 
@@ -242,7 +242,7 @@ crab review delete <PR>     # Delete a review session
 
 ### Session Management (`crab session`)
 
-Track and resume Claude conversations across workspaces:
+Track and resume agent conversations across workspaces:
 
 ```bash
 crab session start "feature-x"    # Start a named session
@@ -250,6 +250,21 @@ crab session resume "feature-x"   # Resume an existing session
 crab session ls                   # List sessions with summaries
 crab session delete "feature-x"   # Delete a session
 ```
+
+### Agent Sync (`crab agent`)
+
+Sync user-level configurations (MCP servers, custom agents/skills) between Claude Code and Codex CLI. Useful when switching a project's agent or maintaining parity across both.
+
+```bash
+crab agent status                              # Audit what's configured on each side
+crab agent sync mcp --from claude              # Preview MCP server sync (dry run)
+crab agent sync mcp --from claude --apply      # Sync MCP servers Claude → Codex
+crab agent sync agents --from claude           # Preview agent → skill rewrites (dry run)
+crab agent sync agents --from claude --apply   # Rewrite Claude agents as Codex skills (LLM-assisted)
+crab agent sync all --apply                    # Sync everything both directions
+```
+
+MCP sync is mechanical (JSON↔TOML translation). Agent/skill sync uses whichever LLM CLI is available to rewrite between formats. Dry-run by default.
 
 ### Linear Tickets (`crab ticket`)
 
@@ -359,6 +374,7 @@ Per-project config (`~/.crabcode/projects/<alias>.yaml`):
 
 ```yaml
 session_name: pf
+agent: claude                # or "codex" — defaults to claude if omitted
 workspace_base: ~/Dev/my-project-workspaces
 main_repo: ~/Dev/my-project
 
@@ -381,7 +397,7 @@ layout:
     - name: server
       command: pnpm dev
     - name: main
-      command: claude
+      command: claude --dangerously-skip-permissions  # or: codex --full-auto
 
 # Optional: persistent storage across resets
 shared_volume:
@@ -408,14 +424,18 @@ See `examples/` for more configuration examples.
 - `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (for `crab pf`)
 - Slack bot token (for `crab pf serve`)
 
+**For AI agents (pick one or both):**
+- [Claude Code](https://claude.ai/code): `npm install -g @anthropic-ai/claude-code`
+- [Codex CLI](https://github.com/openai/codex): `npm install -g @openai/codex`
+
 **For PR reviews (`crab review`, `crab court`):**
-- [gh](https://cli.github.com/), [Claude Code](https://claude.ai/code)
-- Optional: [Codex CLI](https://github.com/openai/codex) (for court review)
+- [gh](https://cli.github.com/)
+- Claude Code and/or Codex CLI (court review uses both)
 
 ```bash
 # macOS
 brew install tmux yq zip gh
-npm install -g @anthropic-ai/claude-code
+npm install -g @anthropic-ai/claude-code  # and/or @openai/codex
 ```
 
 ## Installation
@@ -453,7 +473,7 @@ git pull origin main
 ┌─────────────────────────┬─────────────────────────┐
 │      terminal           │                         │
 │      (shell)            │        main             │
-├─────────────────────────┤   (claude/editor)       │
+├─────────────────────────┤   (claude/codex/editor)  │
 │      server             │                         │
 │      (pnpm dev)         │                         │
 └─────────────────────────┴─────────────────────────┘
@@ -520,8 +540,9 @@ The restore agent walks through each phase — installing tools, restoring confi
 6. **Edit config for your project:**
    ```bash
    # Set your layout commands in ~/.crabcode/projects/<alias>.yaml
+   # - agent: claude or codex (defaults to claude)
    # - server pane: your dev server (e.g., pnpm dev)
-   # - main pane: your main tool (e.g., claude)
+   # - main pane: your agent command (e.g., claude --dangerously-skip-permissions, codex --full-auto)
    ```
 
 7. **Start working:**
