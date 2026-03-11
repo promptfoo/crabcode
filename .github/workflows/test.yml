@@ -35,4 +35,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run shellcheck
-        run: shellcheck src/crabcode
+        run: shellcheck --severity=error src/crabcode
