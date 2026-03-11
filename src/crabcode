@@ -72,6 +72,206 @@ command_exists() {
 }
 
 # =============================================================================
+# Agent Abstraction Layer
+# =============================================================================
+# Crabcode supports multiple coding agents (claude, codex, etc.)
+# The agent is configured per-project via the `agent:` field in project YAML.
+
+# Get configured agent type: "claude" or "codex"
+get_agent_type() {
+  local agent=$(yq -r '.agent // "claude"' "$CONFIG_FILE" 2>/dev/null)
+  echo "${agent:-claude}"
+}
+
+# Get the base agent command (interactive mode)
+get_agent_base_cmd() {
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "codex --full-auto" ;;
+    claude|*) echo "claude --dangerously-skip-permissions" ;;
+  esac
+}
+
+# Build agent command with "continue last session" semantics
+agent_cmd_continue() {
+  local cmd="$1"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "codex resume --last --full-auto" ;;
+    claude|*) echo "$cmd --continue" ;;
+  esac
+}
+
+# Build agent command with "resume specific session" semantics
+agent_cmd_resume() {
+  local cmd="$1"
+  local session_id="$2"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "codex resume $session_id --full-auto" ;;
+    claude|*) echo "$cmd --resume $session_id" ;;
+  esac
+}
+
+# Append prompt to agent command
+agent_cmd_with_prompt() {
+  local cmd="$1"
+  local prompt="$2"
+  local agent=$(get_agent_type)
+  # Both claude and codex accept positional prompts
+  echo "$cmd $prompt"
+}
+
+# Get the non-interactive print command for the agent
+agent_print_cmd() {
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "codex exec" ;;
+    claude|*) echo "claude --print" ;;
+  esac
+}
+
+# Run agent non-interactively with a prompt (stdin)
+agent_run_print() {
+  local prompt="$1"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "$prompt" | timeout 30 codex exec 2>/dev/null || echo "" ;;
+    claude|*) echo "$prompt" | timeout 30 claude --print 2>/dev/null || echo "" ;;
+  esac
+}
+
+# Check if the configured agent CLI is installed
+agent_cli_exists() {
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) command_exists codex ;;
+    claude|*) command_exists claude ;;
+  esac
+}
+
+# Get agent display name (for user-facing messages)
+agent_display_name() {
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "Codex" ;;
+    claude|*) echo "Claude" ;;
+  esac
+}
+
+# Get agent resume file name (per-workspace)
+agent_resume_file() {
+  local dir="$1"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "$dir/.codex-resume-session" ;;
+    claude|*) echo "$dir/.claude-resume-session" ;;
+  esac
+}
+
+# Get agent session history directory
+agent_session_dir() {
+  local workspace_dir="$1"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "$HOME/.codex" ;;
+    claude|*) echo "$HOME/.claude/projects/$(echo "$workspace_dir" | tr '/.' '--')" ;;
+  esac
+}
+
+# Get the agent system prompt file path and ensure it exists
+agent_ensure_system_prompt() {
+  local dir="$1"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex)
+      local agents_file="$dir/AGENTS.md"
+      if ! grep -q "^## Team Mode$" "$agents_file" 2>/dev/null; then
+        cat >> "$agents_file" << 'AGENTSEOF'
+
+## Team Mode
+
+You can spawn agent teammates for complex tasks. Create specialized agents (researcher, implementer, reviewer, debugger) that work in parallel. Coordinate the team, assign tasks, and synthesize results. Only spawn teams when the task benefits from parallel work.
+AGENTSEOF
+      fi
+      ;;
+    claude|*)
+      local team_file="$dir/.claude/CLAUDE.md"
+      mkdir -p "$dir/.claude"
+      if ! grep -q "^## Team Mode$" "$team_file" 2>/dev/null; then
+        cat >> "$team_file" << 'CLAUDEEOF'
+
+## Team Mode
+
+You can spawn agent teammates for complex tasks. Use the Task tool to create specialized agents (researcher, implementer, reviewer, debugger) that work in parallel. Coordinate the team, assign tasks, and synthesize results. Only spawn teams when the task benefits from parallel work.
+CLAUDEEOF
+      fi
+      ;;
+  esac
+}
+
+# Capture agent session ID for WIP save
+agent_capture_session_id() {
+  local dir="$1"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex)
+      # Codex stores sessions in ~/.codex - grab most recent session ID
+      local codex_sessions="$HOME/.codex/sessions"
+      if [ -d "$codex_sessions" ]; then
+        ls -t "$codex_sessions" 2>/dev/null | head -1 || echo ""
+      else
+        echo ""
+      fi
+      ;;
+    claude|*)
+      local claude_project_dir="$HOME/.claude/projects/$(echo "$dir" | tr '/.' '--')"
+      if [ -d "$claude_project_dir" ]; then
+        ls -t "$claude_project_dir"/*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl 2>/dev/null || echo ""
+      else
+        echo ""
+      fi
+      ;;
+  esac
+}
+
+# Write agent resume file from session ID
+agent_write_resume_file() {
+  local dir="$1"
+  local session_id="$2"
+  local resume_file=$(agent_resume_file "$dir")
+  if [ -n "$session_id" ] && [ "$session_id" != "" ]; then
+    echo "$session_id" > "$resume_file"
+    echo -e "  ${BLUE}$(agent_display_name) conversation will resume automatically${NC}"
+  fi
+}
+
+# Build agent command with context file
+agent_cmd_with_context() {
+  local cmd="$1"
+  local context_file="$2"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) echo "$cmd \"$(cat "$context_file" 2>/dev/null | head -c 4000)\"" ;;
+    claude|*) echo "$cmd \"$context_file\"" ;;
+  esac
+}
+
+# Generate auto-summary using agent in non-interactive mode (for review sessions)
+agent_generate_summary() {
+  local prompt="$1"
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex)
+      codex exec "$prompt" 2>/dev/null | tail -1 || echo ""
+      ;;
+    claude|*)
+      claude --continue --print -p "$prompt" 2>/dev/null | tail -1 || echo ""
+      ;;
+  esac
+}
+
+# =============================================================================
 # Config Loading (using yq for YAML parsing)
 # =============================================================================
 
@@ -1428,31 +1628,20 @@ open_workspace() {
 
   # Build commands from config
   local dev_cmd=$(get_pane_command "server")
-  local claude_cmd=$(get_pane_command "main")
+  local main_cmd=$(get_pane_command "main")
 
-  # Check for WIP Claude session resume
-  local resume_file="$dir/.claude-resume-session"
-  if [ -f "$resume_file" ] && [[ "$claude_cmd" == *"claude"* ]]; then
+  # Check for agent session resume
+  local resume_file=$(agent_resume_file "$dir")
+  if [ -f "$resume_file" ]; then
     local resume_id=$(cat "$resume_file")
     if [ -n "$resume_id" ]; then
-      claude_cmd="$claude_cmd --resume $resume_id"
+      main_cmd=$(agent_cmd_resume "$main_cmd" "$resume_id")
       rm -f "$resume_file"
     fi
   fi
 
-  # Always ensure team context exists in CLAUDE.md
-  local team_file="$dir/.claude/CLAUDE.md"
-  mkdir -p "$dir/.claude"
-
-  # Add team section if not present
-  if ! grep -q "^## Team Mode$" "$team_file" 2>/dev/null; then
-    cat >> "$team_file" << 'EOF'
-
-## Team Mode
-
-You can spawn agent teammates for complex tasks. Use the Task tool to create specialized agents (researcher, implementer, reviewer, debugger) that work in parallel. Coordinate the team, assign tasks, and synthesize results. Only spawn teams when the task benefits from parallel work.
-EOF
-  fi
+  # Ensure agent system prompt exists (CLAUDE.md or AGENTS.md)
+  agent_ensure_system_prompt "$dir"
 
   # Port override if needed
   if [ "$need_override" = "true" ]; then
@@ -1463,11 +1652,11 @@ EOF
   local port_msg="Using port $env_api_port"
   [ "$need_override" = "true" ] && port_msg="Port $env_api_port in use → using $api_port"
 
-  # Append initial prompt to claude command if provided
-  if [ -n "$initial_prompt" ] && [[ "$claude_cmd" == *"claude"* ]]; then
+  # Append initial prompt to agent command if provided
+  if [ -n "$initial_prompt" ]; then
     local escaped_prompt
     escaped_prompt=$(printf '%q' "$initial_prompt")
-    claude_cmd="$claude_cmd $escaped_prompt"
+    main_cmd=$(agent_cmd_with_prompt "$main_cmd" "$escaped_prompt")
   fi
 
   # Check if session exists
@@ -1481,7 +1670,7 @@ EOF
     echo "  Directory: $dir"
     echo -e "  ${YELLOW}$port_msg${NC}"
 
-    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "new"
+    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$main_cmd" "$port_msg" "new"
     tmux attach -t "$SESSION_NAME"
   else
     # Session exists
@@ -1510,9 +1699,9 @@ EOF
         sleep 0.3
         [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "$dev_cmd" C-m
 
-        if [ -n "$claude_cmd" ]; then
+        if [ -n "$main_cmd" ]; then
           # Run command via respawn-pane shell arg to avoid zsh init prompts eating keystrokes
-          tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir" "$claude_cmd; exec $SHELL"
+          tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir" "$main_cmd; exec $SHELL"
         else
           tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
         fi
@@ -1531,7 +1720,7 @@ EOF
       echo "  Directory: $dir"
       echo -e "  ${YELLOW}$port_msg${NC}"
 
-      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
+      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$main_cmd" "$port_msg" "add"
 
       if [ -n "$TMUX" ]; then
         tmux select-window -t "$SESSION_NAME:$window_name"
@@ -1547,7 +1736,7 @@ create_workspace_layout() {
   local window_name=$1
   local dir=$2
   local dev_cmd=$3
-  local claude_cmd=$4
+  local main_cmd=$4
   local port_msg=$5
   local mode=$6  # "new" or "add"
 
@@ -1577,7 +1766,7 @@ create_workspace_layout() {
 
   # After splits: terminal=base, main=base+1, server=base+2
   [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "echo '$port_msg' && $dev_cmd" C-m
-  [ -n "$claude_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "$claude_cmd" C-m
+  [ -n "$main_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_main" "$main_cmd" C-m
   tmux select-pane -t "$SESSION_NAME:$window_name.$p_main"
 }
 
@@ -1865,7 +2054,7 @@ restart_workspace() {
     local env_api_port=$(echo "$port_info" | cut -d: -f4)
 
     local dev_cmd=$(get_pane_command "server")
-    local claude_cmd=$(get_pane_command "main")
+    local main_cmd=$(get_pane_command "main")
 
     if [ "$need_override" = "true" ]; then
       dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
@@ -1893,7 +2082,7 @@ restart_workspace() {
       tmux rename-window -t "$SESSION_NAME:$old_window" "$temp_old" 2>/dev/null || true
 
       # Now create new window with correct name
-      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
+      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$main_cmd" "$port_msg" "add"
 
       # Switch to new window
       tmux select-window -t "$SESSION_NAME:$window_name"
@@ -1907,7 +2096,7 @@ restart_workspace() {
       success "Workspace $num restarted with fresh layout!"
     else
       echo -e "${YELLOW}  No existing window found - creating new...${NC}"
-      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "$port_msg" "add"
+      create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$main_cmd" "$port_msg" "add"
       tmux select-window -t "$SESSION_NAME:$window_name"
     fi
   else
@@ -1933,20 +2122,20 @@ continue_workspace() {
   local need_override=$(echo "$port_info" | cut -d: -f3)
 
   local dev_cmd=$(get_pane_command "server")
-  local claude_cmd=$(get_pane_command "main")
+  local main_cmd=$(get_pane_command "main")
 
-  # Add session resume or --continue to claude command
-  local resume_file="$dir/.claude-resume-session"
-  if [ -f "$resume_file" ] && [[ "$claude_cmd" == *"claude"* ]]; then
+  # Add session resume or --continue to agent command
+  local resume_file=$(agent_resume_file "$dir")
+  if [ -f "$resume_file" ]; then
     local resume_id=$(cat "$resume_file")
     if [ -n "$resume_id" ]; then
-      claude_cmd="$claude_cmd --resume $resume_id"
+      main_cmd=$(agent_cmd_resume "$main_cmd" "$resume_id")
       rm -f "$resume_file"
     else
-      claude_cmd="$claude_cmd --continue"
+      main_cmd=$(agent_cmd_continue "$main_cmd")
     fi
-  elif [[ "$claude_cmd" == *"claude"* ]]; then
-    claude_cmd="$claude_cmd --continue"
+  else
+    main_cmd=$(agent_cmd_continue "$main_cmd")
   fi
 
   if [ "$need_override" = "true" ]; then
@@ -1965,9 +2154,9 @@ continue_workspace() {
     sleep 0.3
     [ -n "$dev_cmd" ] && tmux send-keys -t "$SESSION_NAME:$window_name.$p_server" "$dev_cmd" C-m
 
-    if [ -n "$claude_cmd" ]; then
+    if [ -n "$main_cmd" ]; then
       # Run command via respawn-pane shell arg to avoid zsh init prompts eating keystrokes
-      tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir" "$claude_cmd; exec $SHELL"
+      tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir" "$main_cmd; exec $SHELL"
     else
       tmux respawn-pane -k -t "$SESSION_NAME:$window_name.$p_main" -c "$dir"
     fi
@@ -1975,7 +2164,7 @@ continue_workspace() {
     success "Workspace $num continued with previous session"
   else
     echo "  Creating window with --continue..."
-    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$claude_cmd" "" "add"
+    create_workspace_layout "$window_name" "$dir" "$dev_cmd" "$main_cmd" "" "add"
 
     if [ -n "$TMUX" ]; then
       tmux select-window -t "$SESSION_NAME:$window_name"
@@ -2007,7 +2196,7 @@ open_workspace_separate() {
   check_and_setup_workspace "$dir" "$num"
 
   local dev_cmd=$(get_pane_command "server")
-  local claude_cmd=$(get_pane_command "main")
+  local main_cmd=$(get_pane_command "main")
 
   if [ "$need_override" = "true" ]; then
     dev_cmd="PORT=$api_port APP_PORT=$app_port $dev_cmd"
@@ -2027,7 +2216,7 @@ open_workspace_separate() {
     tmux split-window -v -t "$session" -c "$dir"
 
     [ -n "$dev_cmd" ] && tmux send-keys -t "$session:dev.2" "$dev_cmd" C-m
-    [ -n "$claude_cmd" ] && tmux send-keys -t "$session:dev.3" "$claude_cmd" C-m
+    [ -n "$main_cmd" ] && tmux send-keys -t "$session:dev.3" "$main_cmd" C-m
     tmux select-pane -t "$session:dev.3"
 
     if command_exists osascript; then
@@ -2195,10 +2384,10 @@ wip_save() {
     slug=$(echo "$custom_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
     summary="$custom_name"
   else
-    # Try to generate AI summary if claude is available
+    # Try to generate AI summary if agent is available
     slug="wip-$(date +%H%M)"
     summary="Work in progress"
-    if command_exists claude; then
+    if agent_cli_exists; then
       local all_diffs="$diff$staged$submodule_diffs"
       local summary_json=$(generate_wip_summary "$all_diffs")
       local parsed_slug=$(echo "$summary_json" | sed -n 's/.*"slug"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -2256,12 +2445,8 @@ wip_save() {
     fi
   done
 
-  # Capture Claude session ID for conversation resume
-  local claude_session=""
-  local claude_project_dir="$HOME/.claude/projects/$(echo "$dir" | tr '/.' '--')"
-  if [ -d "$claude_project_dir" ]; then
-    claude_session=$(ls -t "$claude_project_dir"/*.jsonl 2>/dev/null | head -1 | xargs -I{} basename {} .jsonl 2>/dev/null || echo "")
-  fi
+  # Capture agent session ID for conversation resume
+  local agent_session=$(agent_capture_session_id "$dir")
 
   cat > "$wip_path/metadata.json" << EOF
 {
@@ -2271,7 +2456,9 @@ wip_save() {
   "workspace": $num,
   "branch": "$branch",
   "commits_ahead": $commits_ahead,
-  "claude_session": "$claude_session",
+  "agent": "$(get_agent_type)",
+  "agent_session": "$agent_session",
+  "claude_session": "$agent_session",
   "created_at": "$(date -Iseconds)"
 }
 EOF
@@ -2293,14 +2480,14 @@ generate_wip_summary() {
   local max_lines=100
   local truncated_diff=$(echo "$diff_content" | head -n $max_lines)
 
-  if command_exists claude; then
+  if agent_cli_exists; then
     local prompt="Based on this git diff, provide a JSON response with exactly this format (no markdown, just raw JSON):
 {\"slug\": \"short-kebab-case-name-max-30-chars\", \"summary\": \"One sentence describing the changes\"}
 
 Git diff:
 $truncated_diff"
 
-    local result=$(echo "$prompt" | timeout 30 claude --print 2>/dev/null || echo "")
+    local result=$(agent_run_print "$prompt")
 
     if [ -n "$result" ]; then
       local json=$(echo "$result" | grep -o '{[^}]*}' | head -1)
@@ -2352,14 +2539,19 @@ wip_list() {
       local display_date=$(echo "$created" | cut -d'T' -f1)
       local display_time=$(echo "$created" | cut -d'T' -f2 | cut -d'+' -f1 | cut -d'-' -f1 | cut -c1-5)
 
-      # Check for Claude session
-      local claude_tag=""
-      local cs=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
-      [ -n "$cs" ] && claude_tag="  ${CYAN}Claude: saved${NC}"
+      # Check for agent session
+      local session_tag=""
+      local cs=$(grep -o '"agent_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"agent_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      # Backward compat: also check claude_session
+      [ -z "$cs" ] && cs=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      local saved_agent=$(grep -o '"agent"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"agent"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      [ -z "$saved_agent" ] && saved_agent="claude"
+      local agent_label=$(echo "$saved_agent" | sed 's/^./\U&/')
+      [ -n "$cs" ] && session_tag="  ${CYAN}${agent_label}: saved${NC}"
 
       echo -e "  ${GREEN}[$i]${NC} $name"
       echo -e "      ${BLUE}$summary${NC}"
-      echo -e "      Branch: $branch | Created: $display_date $display_time${claude_tag}"
+      echo -e "      Branch: $branch | Created: $display_date $display_time${session_tag}"
       echo ""
     else
       echo -e "  ${GREEN}[$i]${NC} $name (no metadata)"
@@ -2449,12 +2641,16 @@ wip_list_global() {
 
       echo -e "  ${GREEN}[$i]${NC} ${BOLD}$wip_name${NC}"
       echo -e "      ${BLUE}$summary${NC}"
-      # Check for Claude session
-      local claude_tag=""
-      local claude_session=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
-      [ -n "$claude_session" ] && claude_tag="  ${CYAN}Claude: saved${NC}"
+      # Check for agent session
+      local session_tag=""
+      local agent_sess=$(grep -o '"agent_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"agent_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      [ -z "$agent_sess" ] && agent_sess=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      local saved_agent=$(grep -o '"agent"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"agent"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+      [ -z "$saved_agent" ] && saved_agent="claude"
+      local agent_label=$(echo "$saved_agent" | sed 's/^./\U&/')
+      [ -n "$agent_sess" ] && session_tag="  ${CYAN}${agent_label}: saved${NC}"
 
-      echo -e "      ${GRAY}Workspace: ${NC}$ws_num  ${GRAY}Branch: ${NC}$branch  ${GRAY}Files: ${NC}$file_count patches${claude_tag}"
+      echo -e "      ${GRAY}Workspace: ${NC}$ws_num  ${GRAY}Branch: ${NC}$branch  ${GRAY}Files: ${NC}$file_count patches${session_tag}"
       if [ -n "$commits_ahead" ] && [ "$commits_ahead" != "0" ]; then
         echo -e "      ${GRAY}Commits ahead: ${NC}$commits_ahead  ${GRAY}Created: ${NC}$display_date $display_time"
       else
@@ -2944,24 +3140,24 @@ _restore_wip() {
 
   success "WIP restored: $wip_name"
 
-  # Write Claude session resume file if available
+  # Write agent session resume file if available
   if [ -f "$metadata" ]; then
-    local claude_session=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
-    if [ -n "$claude_session" ] && [ "$claude_session" != "" ]; then
-      echo "$claude_session" > "$dir/.claude-resume-session"
-      echo -e "  ${BLUE}Claude conversation will resume automatically${NC}"
-    fi
+    local agent_sess=$(grep -o '"agent_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"agent_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+    # Backward compat: also check claude_session
+    [ -z "$agent_sess" ] && agent_sess=$(grep -o '"claude_session"[[:space:]]*:[[:space:]]*"[^"]*"' "$metadata" | sed 's/"claude_session"[[:space:]]*:[[:space:]]*"//' | sed 's/"$//')
+    agent_write_resume_file "$dir" "$agent_sess"
   fi
 
-  # Relaunch the workspace tmux window with Claude session resume
+  # Relaunch the workspace tmux window with agent session resume
   if [ "$open_after" = "true" ]; then
     echo ""
     echo "  Relaunching workspace $num..."
     continue_workspace "$num"
   else
     echo ""
-    if [ -f "$dir/.claude-resume-session" ]; then
-      echo -e "  Run ${BOLD}crab $num continue${NC} to launch with the saved Claude conversation"
+    local resume_file=$(agent_resume_file "$dir")
+    if [ -f "$resume_file" ]; then
+      echo -e "  Run ${BOLD}crab $num continue${NC} to launch with the saved $(agent_display_name) conversation"
     else
       echo -e "  Run 'crab $num' to open the workspace"
     fi
@@ -4445,7 +4641,9 @@ layout:
 #     - name: server
 #       command: "npm run dev"
 #     - name: main
-#       command: "claude"
+#       command: ""  # Set via 'agent:' field, or override directly
+#
+# agent: claude  # or "codex" - configures the coding agent for this project
 #
 # shared_volume:
 #   enabled: true
@@ -4467,7 +4665,7 @@ EOF
   echo "  1. Run 'crab @$alias_input config scan' to detect .env files and ports"
   echo "  2. Edit $CONFIG_FILE to set your layout commands:"
   echo "     - server pane: your dev server command (e.g., pnpm dev)"
-  echo "     - main pane: your main tool (e.g., claude)"
+  echo "     - main pane: your coding agent (e.g., claude, codex)"
   echo "  3. Run 'crab @$alias_input ws 1' to create your first workspace"
   echo ""
 }
@@ -6104,21 +6302,35 @@ create_handoff() {
     tmux capture-pane -t "$SESSION_NAME:$window_name.2" -p -S -100 2>/dev/null > "$handoff_path/main-output.txt" || true
   fi
 
-  # 3. Save Claude conversation if available
-  echo "  🤖 Looking for Claude context..."
-  local claude_history="$HOME/.claude/projects"
-  if [ -d "$claude_history" ]; then
-    # Find recent conversation files
-    local project_dir=$(find "$claude_history" -type d -name "*$(basename "$dir")*" 2>/dev/null | head -1)
-    if [ -n "$project_dir" ] && [ -d "$project_dir" ]; then
-      # Copy recent conversation (last file)
-      local recent_conv=$(ls -t "$project_dir"/*.jsonl 2>/dev/null | head -1)
-      if [ -n "$recent_conv" ] && [ -f "$recent_conv" ]; then
-        cp "$recent_conv" "$handoff_path/claude-conversation.jsonl"
-        echo "    Found Claude conversation"
+  # 3. Save agent conversation if available
+  local agent_name=$(agent_display_name)
+  echo "  🤖 Looking for $agent_name context..."
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex)
+      local codex_sessions="$HOME/.codex/sessions"
+      if [ -d "$codex_sessions" ]; then
+        local recent_session=$(ls -t "$codex_sessions" 2>/dev/null | head -1)
+        if [ -n "$recent_session" ]; then
+          cp -r "$codex_sessions/$recent_session" "$handoff_path/codex-session" 2>/dev/null
+          echo "    Found Codex session"
+        fi
       fi
-    fi
-  fi
+      ;;
+    claude|*)
+      local claude_history="$HOME/.claude/projects"
+      if [ -d "$claude_history" ]; then
+        local project_dir=$(find "$claude_history" -type d -name "*$(basename "$dir")*" 2>/dev/null | head -1)
+        if [ -n "$project_dir" ] && [ -d "$project_dir" ]; then
+          local recent_conv=$(ls -t "$project_dir"/*.jsonl 2>/dev/null | head -1)
+          if [ -n "$recent_conv" ] && [ -f "$recent_conv" ]; then
+            cp "$recent_conv" "$handoff_path/claude-conversation.jsonl"
+            echo "    Found Claude conversation"
+          fi
+        fi
+      fi
+      ;;
+  esac
 
   # 4. Save environment hints
   echo "  ⚙️  Saving environment info..."
@@ -6310,13 +6522,20 @@ receive_handoff() {
     git apply "$handoff_dir/unstaged.patch" 2>/dev/null || true
   fi
 
-  # Copy Claude conversation if available
+  # Copy agent conversation if available
+  local agent_name=$(agent_display_name)
   if [ -f "$handoff_dir/claude-conversation.jsonl" ]; then
     echo "  🤖 Restoring Claude context..."
     local claude_project_dir="$HOME/.claude/projects/-$(echo "$target_dir" | tr '/' '-')"
     mkdir -p "$claude_project_dir"
     cp "$handoff_dir/claude-conversation.jsonl" "$claude_project_dir/handoff-$(date +%s).jsonl"
     echo "    Claude conversation saved (use --continue to resume)"
+  elif [ -d "$handoff_dir/codex-session" ]; then
+    echo "  🤖 Restoring Codex context..."
+    local codex_sessions="$HOME/.codex/sessions"
+    mkdir -p "$codex_sessions"
+    cp -r "$handoff_dir/codex-session" "$codex_sessions/handoff-$(date +%s)" 2>/dev/null
+    echo "    Codex session saved"
   fi
 
   # Show terminal history context
@@ -6329,7 +6548,7 @@ receive_handoff() {
   echo ""
   echo "  Next steps:"
   echo "    crab ws $target_ws              Open the workspace"
-  echo "    crab ws $target_ws continue     Open with Claude --continue"
+  echo "    crab ws $target_ws continue     Open with $agent_name --continue"
   echo ""
 
   # Show README
@@ -7878,7 +8097,8 @@ name: $name
 project: ${PROJECT_ALIAS:-default}
 created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-claude_session_id: ""
+agent: $(get_agent_type)
+agent_session_id: ""
 summary: ""
 type: general
 EOF
@@ -8009,7 +8229,7 @@ session_list() {
   echo ""
 }
 
-# Start a new session and launch Claude
+# Start a new session and launch agent
 session_start() {
   local name="$1"
   local context="${2:-}"
@@ -8017,29 +8237,32 @@ session_start() {
   local session_dir=$(session_create "$name" "$context")
   [ $? -eq 0 ] || return 1
 
-  echo -e "${CYAN}Starting session: $name${NC}"
+  local agent_name=$(agent_display_name)
+  echo -e "${CYAN}Starting session: $name ($agent_name)${NC}"
 
-  # Start Claude and capture session ID
   local context_file="$session_dir/context.md"
-  local claude_args=""
+  local base_cmd=$(get_agent_base_cmd)
 
   if [ -f "$context_file" ]; then
     echo -e "  Context loaded from: $context_file"
-    claude_args="-p \"$(cat "$context_file" | head -c 1000)\""
   fi
 
   # Update last accessed
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-  # Run Claude interactively with context
+  # Run agent interactively with context
   cd "$(pwd)"
+  local agent=$(get_agent_type)
   if [ -f "$context_file" ]; then
-    claude --dangerously-skip-permissions --chrome "$context_file"
+    case "$agent" in
+      codex) $base_cmd "$(cat "$context_file" | head -c 4000)" ;;
+      claude|*) $base_cmd "$context_file" ;;
+    esac
   else
-    claude --dangerously-skip-permissions --chrome
+    $base_cmd
   fi
 
-  # After Claude exits, prompt for summary if empty
+  # After agent exits, prompt for summary if empty
   local current_summary=$(session_get "$name" "summary")
   if [ -z "$current_summary" ] || [ "$current_summary" = "null" ]; then
     echo ""
@@ -8076,9 +8299,11 @@ session_resume() {
   # Update last accessed
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-  # Resume Claude from session directory
+  # Resume agent from session directory
   cd "$session_dir"
-  claude --dangerously-skip-permissions --chrome --continue
+  local base_cmd=$(get_agent_base_cmd)
+  local resume_cmd=$(agent_cmd_continue "$base_cmd")
+  $resume_cmd
 }
 
 # Delete a session
@@ -8511,7 +8736,8 @@ name: $name
 project: ${PROJECT_ALIAS:-default}
 created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-claude_session_id: ""
+agent: $(get_agent_type)
+agent_session_id: ""
 summary: ""
 type: review
 prs:
@@ -8526,14 +8752,20 @@ EOF
   echo -e "Context written to: $session_dir/context.md"
   echo ""
 
-  # Start Claude from session directory so it can write review-output.md there
-  read -p "Start Claude now? [Y/n] " start_now
+  # Start agent from session directory so it can write review-output.md there
+  local agent_name=$(agent_display_name)
+  read -p "Start $agent_name now? [Y/n] " start_now
   if [[ ! "$start_now" =~ ^[Nn]$ ]]; then
     session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     cd "$session_dir"
-    claude --dangerously-skip-permissions --chrome "context.md"
+    local base_cmd=$(get_agent_base_cmd)
+    local agent=$(get_agent_type)
+    case "$agent" in
+      codex) $base_cmd "$(cat context.md | head -c 4000)" ;;
+      claude|*) $base_cmd "context.md" ;;
+    esac
 
-    # Prompt for summary after Claude exits
+    # Prompt for summary after agent exits
     _prompt_review_summary "$name"
   fi
 }
@@ -8542,8 +8774,9 @@ EOF
 _prompt_review_summary() {
   local name="$1"
   echo ""
+  local agent_name=$(agent_display_name)
   echo "Save a summary for this review?"
-  echo "  [a] Auto-generate (Claude summarizes)"
+  echo "  [a] Auto-generate ($agent_name summarizes)"
   echo "  [m] Manual (type your own)"
   echo "  [s] Skip"
   read -p "Choice [a/m/s]: " choice
@@ -8551,7 +8784,7 @@ _prompt_review_summary() {
   case "$choice" in
     a|A|"")
       echo -e "${CYAN}Generating summary...${NC}"
-      local summary=$(claude --continue --print -p "Summarize this review session in ONE short line (under 60 chars). Format: '<main finding/status> - <key detail>'. Example: 'Found 3 issues - N+1 query, missing index, race condition'. Just output the summary, nothing else." 2>/dev/null | tail -1)
+      local summary=$(agent_generate_summary "Summarize this review session in ONE short line (under 60 chars). Format: '<main finding/status> - <key detail>'. Example: 'Found 3 issues - N+1 query, missing index, race condition'. Just output the summary, nothing else.")
       if [ -n "$summary" ]; then
         # Clean up the summary (remove quotes if present)
         summary="${summary#\"}"
@@ -8622,7 +8855,8 @@ name: $name
 project: ${PROJECT_ALIAS:-default}
 created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-claude_session_id: ""
+agent: $(get_agent_type)
+agent_session_id: ""
 summary: ""
 type: review
 prs:
@@ -8634,12 +8868,17 @@ EOF
   echo -e "${GREEN}Review session created: $name${NC}"
   echo ""
 
-  # Start Claude from session directory so it can write review-output.md there
+  # Start agent from session directory so it can write review-output.md there
   session_update "$name" "last_accessed" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   cd "$session_dir"
-  claude --dangerously-skip-permissions --chrome "context.md"
+  local base_cmd=$(get_agent_base_cmd)
+  local agent=$(get_agent_type)
+  case "$agent" in
+    codex) $base_cmd "$(cat context.md | head -c 4000)" ;;
+    claude|*) $base_cmd "context.md" ;;
+  esac
 
-  # Prompt for summary after Claude exits
+  # Prompt for summary after agent exits
   _prompt_review_summary "$name"
 }
 
@@ -8749,7 +8988,8 @@ name: $name
 project: ${PROJECT_ALIAS:-default}
 created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-claude_session_id: ""
+agent: $(get_agent_type)
+agent_session_id: ""
 summary: ""
 type: court
 prs:
@@ -8952,7 +9192,8 @@ name: $name
 project: ${PROJECT_ALIAS:-default}
 created: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 last_accessed: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-claude_session_id: ""
+agent: $(get_agent_type)
+agent_session_id: ""
 summary: ""
 type: court
 prs:
@@ -10311,4 +10552,7 @@ main() {
   esac
 }
 
-main "$@"
+# Source guard: allow this script to be sourced for testing without executing main
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
