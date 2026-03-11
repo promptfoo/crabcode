@@ -330,16 +330,16 @@ teardown() {
   assert_output ""
 }
 
-@test "agent_capture_session_id: codex finds session from ~/.codex/sessions/" {
+@test "agent_capture_session_id: codex finds session UUID from ~/.codex/sessions/" {
   CONFIG_FILE="${HOME}/.crabcode/projects/codex-project.yaml"
 
-  # Set up fake codex sessions
-  mkdir -p "${HOME}/.codex/sessions"
-  mkdir "${HOME}/.codex/sessions/codex-sess-xyz"
+  # Set up fake codex sessions with realistic directory structure
+  mkdir -p "${HOME}/.codex/sessions/2026/03/10"
+  touch "${HOME}/.codex/sessions/2026/03/10/rollout-2026-03-10T21-25-33-019cdb24-92fb-7513-a77b-548656b63eec.jsonl"
 
   run agent_capture_session_id "/tmp/any-workspace"
   assert_success
-  assert_output "codex-sess-xyz"
+  assert_output "019cdb24-92fb-7513-a77b-548656b63eec"
 }
 
 # =============================================================================

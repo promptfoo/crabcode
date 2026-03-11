@@ -216,10 +216,16 @@ agent_capture_session_id() {
   local agent=$(get_agent_type)
   case "$agent" in
     codex)
-      # Codex stores sessions in ~/.codex - grab most recent session ID
+      # Codex stores sessions in ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl
       local codex_sessions="$HOME/.codex/sessions"
       if [ -d "$codex_sessions" ]; then
-        ls -t "$codex_sessions" 2>/dev/null | head -1 || echo ""
+        local latest_file
+        latest_file=$(find "$codex_sessions" -name "*.jsonl" -type f 2>/dev/null | xargs ls -t 2>/dev/null | head -1)
+        if [ -n "$latest_file" ]; then
+          basename "$latest_file" .jsonl | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' || echo ""
+        else
+          echo ""
+        fi
       else
         echo ""
       fi
