@@ -283,6 +283,640 @@ agent_generate_summary() {
 }
 
 # =============================================================================
+# Agent Sync — sync user-level MCP, agents/skills between Claude & Codex
+# =============================================================================
+
+# Show what agent configs exist on each side
+agent_sync_status() {
+  echo -e "${CYAN}Agent Sync Status${NC}"
+  echo ""
+
+  # --- MCP Servers ---
+  echo -e "${BOLD}MCP Servers:${NC}"
+
+  # Claude MCP: parse from settings.json
+  local claude_settings="$HOME/.claude/settings.json"
+  local claude_mcps=""
+  if [ -f "$claude_settings" ]; then
+    claude_mcps=$(python3 -c "
+import json, sys
+d = json.load(open('$claude_settings'))
+servers = set()
+for path, cfg in d.get('projects', {}).items():
+    for name in cfg.get('mcpServers', {}):
+        servers.add(name)
+for s in sorted(servers):
+    print(s)
+" 2>/dev/null)
+  fi
+
+  # Codex MCP: parse from config.toml
+  local codex_config="$HOME/.codex/config.toml"
+  local codex_mcps=""
+  if [ -f "$codex_config" ]; then
+    codex_mcps=$(grep '^\[mcp_servers\.' "$codex_config" 2>/dev/null | sed 's/\[mcp_servers\.\(.*\)\]/\1/' | grep -v '\.env$' | sort -u)
+  fi
+
+  if [ -n "$claude_mcps" ]; then
+    echo -e "  Claude:  ${GREEN}$(echo "$claude_mcps" | tr '\n' ', ' | sed 's/,$//')${NC}"
+  else
+    echo -e "  Claude:  ${GRAY}(none)${NC}"
+  fi
+  if [ -n "$codex_mcps" ]; then
+    echo -e "  Codex:   ${GREEN}$(echo "$codex_mcps" | tr '\n' ', ' | sed 's/,$//')${NC}"
+  else
+    echo -e "  Codex:   ${GRAY}(none)${NC}"
+  fi
+
+  # Show what needs syncing
+  local needs_to_codex=""
+  local needs_to_claude=""
+  if [ -n "$claude_mcps" ]; then
+    while IFS= read -r server; do
+      if ! echo "$codex_mcps" | grep -qx "$server" 2>/dev/null; then
+        needs_to_codex="${needs_to_codex}${server} "
+      fi
+    done <<< "$claude_mcps"
+  fi
+  if [ -n "$codex_mcps" ]; then
+    while IFS= read -r server; do
+      if ! echo "$claude_mcps" | grep -qx "$server" 2>/dev/null; then
+        needs_to_claude="${needs_to_claude}${server} "
+      fi
+    done <<< "$codex_mcps"
+  fi
+  [ -n "$needs_to_codex" ] && echo -e "  ${YELLOW}→ Needs sync to Codex: $needs_to_codex${NC}"
+  [ -n "$needs_to_claude" ] && echo -e "  ${YELLOW}→ Needs sync to Claude: $needs_to_claude${NC}"
+  [ -z "$needs_to_codex" ] && [ -z "$needs_to_claude" ] && [ -n "$claude_mcps$codex_mcps" ] && echo -e "  ${GREEN}✓ In sync${NC}"
+  echo ""
+
+  # --- Custom Agents/Skills ---
+  echo -e "${BOLD}Custom Agents / Skills:${NC}"
+
+  local claude_agents=""
+  if [ -d "$HOME/.claude/agents" ]; then
+    claude_agents=$(ls "$HOME/.claude/agents/"*.md 2>/dev/null | xargs -I{} basename {} .md | sort)
+  fi
+
+  local codex_skills=""
+  if [ -d "$HOME/.codex/skills" ]; then
+    codex_skills=$(ls -d "$HOME/.codex/skills"/*/ 2>/dev/null | grep -v '\.system' | xargs -I{} basename {} | sort)
+  fi
+
+  if [ -n "$claude_agents" ]; then
+    echo -e "  Claude agents:  ${GREEN}$(echo "$claude_agents" | tr '\n' ', ' | sed 's/,$//')${NC}"
+  else
+    echo -e "  Claude agents:  ${GRAY}(none)${NC}"
+  fi
+  if [ -n "$codex_skills" ]; then
+    echo -e "  Codex skills:   ${GREEN}$(echo "$codex_skills" | tr '\n' ', ' | sed 's/,$//')${NC}"
+  else
+    echo -e "  Codex skills:   ${GRAY}(none)${NC}"
+  fi
+
+  # Show what needs syncing
+  local agents_to_codex=""
+  if [ -n "$claude_agents" ]; then
+    while IFS= read -r agent; do
+      [ -z "$agent" ] && continue
+      if [ ! -d "$HOME/.codex/skills/$agent" ]; then
+        agents_to_codex="${agents_to_codex}${agent} "
+      fi
+    done <<< "$claude_agents"
+  fi
+  local skills_to_claude=""
+  if [ -n "$codex_skills" ]; then
+    while IFS= read -r skill; do
+      [ -z "$skill" ] && continue
+      if [ ! -f "$HOME/.claude/agents/${skill}.md" ]; then
+        skills_to_claude="${skills_to_claude}${skill} "
+      fi
+    done <<< "$codex_skills"
+  fi
+  [ -n "$agents_to_codex" ] && echo -e "  ${YELLOW}→ Claude agents not in Codex: $agents_to_codex${NC}"
+  [ -n "$skills_to_claude" ] && echo -e "  ${YELLOW}→ Codex skills not in Claude: $skills_to_claude${NC}"
+  [ -z "$agents_to_codex" ] && [ -z "$skills_to_claude" ] && [ -n "$claude_agents$codex_skills" ] && echo -e "  ${GREEN}✓ In sync${NC}"
+  echo ""
+}
+
+# Sync MCP servers from Claude to Codex
+_sync_mcp_claude_to_codex() {
+  local apply="${1:-false}"
+  local claude_settings="$HOME/.claude/settings.json"
+
+  if [ ! -f "$claude_settings" ]; then
+    echo "No Claude settings found."
+    return 0
+  fi
+
+  # Extract unique MCP servers from all Claude projects
+  local servers_json
+  servers_json=$(python3 -c "
+import json
+d = json.load(open('$claude_settings'))
+merged = {}
+for path, cfg in d.get('projects', {}).items():
+    for name, srv in cfg.get('mcpServers', {}).items():
+        if name not in merged:
+            merged[name] = srv
+print(json.dumps(merged))
+" 2>/dev/null)
+
+  if [ "$servers_json" = "{}" ] || [ -z "$servers_json" ]; then
+    echo "No MCP servers found in Claude config."
+    return 0
+  fi
+
+  # Check which ones already exist in Codex
+  local codex_config="$HOME/.codex/config.toml"
+  local servers_to_add
+  servers_to_add=$(python3 -c "
+import json, sys
+servers = json.loads('$servers_json')
+existing = set()
+try:
+    with open('$codex_config') as f:
+        for line in f:
+            if line.startswith('[mcp_servers.'):
+                name = line.strip().strip('[]').split('.', 1)[1].split(']')[0]
+                if '.' not in name:
+                    existing.add(name)
+except FileNotFoundError:
+    pass
+for name in sorted(servers):
+    if name not in existing:
+        print(name)
+" 2>/dev/null)
+
+  if [ -z "$servers_to_add" ]; then
+    echo -e "${GREEN}All Claude MCP servers already exist in Codex.${NC}"
+    return 0
+  fi
+
+  echo -e "${CYAN}MCP servers to sync (Claude → Codex):${NC}"
+  echo ""
+  while IFS= read -r server_name; do
+    [ -z "$server_name" ] && continue
+    local cmd args env_vars
+    cmd=$(python3 -c "import json; s=json.loads('$servers_json'); print(s['$server_name'].get('command',''))" 2>/dev/null)
+    args=$(python3 -c "import json; s=json.loads('$servers_json'); print(' '.join(s['$server_name'].get('args',[])))" 2>/dev/null)
+    env_vars=$(python3 -c "
+import json
+s = json.loads('$(echo "$servers_json" | sed "s/'/'\\\\''/g")')
+env = s['$server_name'].get('env', {})
+for k, v in env.items():
+    print(f'{k}={v}')
+" 2>/dev/null)
+
+    echo -e "  ${BOLD}$server_name${NC}"
+    echo "    command: $cmd $args"
+    if [ -n "$env_vars" ]; then
+      while IFS= read -r ev; do
+        local key="${ev%%=*}"
+        echo "    env: $key=***"
+      done <<< "$env_vars"
+    fi
+    echo ""
+
+    if [ "$apply" = "true" ]; then
+      # Build codex mcp add command
+      local add_cmd="codex mcp add $server_name"
+      if [ -n "$env_vars" ]; then
+        while IFS= read -r ev; do
+          add_cmd="$add_cmd --env \"$ev\""
+        done <<< "$env_vars"
+      fi
+      add_cmd="$add_cmd -- $cmd $args"
+
+      echo -e "  ${CYAN}Adding $server_name to Codex...${NC}"
+      eval "$add_cmd" 2>&1 | sed 's/^/    /'
+      echo ""
+    fi
+  done <<< "$servers_to_add"
+
+  if [ "$apply" != "true" ]; then
+    echo -e "${YELLOW}Dry run — use 'crab agent sync mcp --apply' to write changes.${NC}"
+  fi
+}
+
+# Sync MCP servers from Codex to Claude
+_sync_mcp_codex_to_claude() {
+  local apply="${1:-false}"
+  local codex_config="$HOME/.codex/config.toml"
+  local claude_settings="$HOME/.claude/settings.json"
+
+  if [ ! -f "$codex_config" ]; then
+    echo "No Codex config found."
+    return 0
+  fi
+
+  # Parse Codex MCP servers from TOML
+  local servers_json
+  servers_json=$(python3 -c "
+import re, json
+
+config_text = open('$codex_config').read()
+servers = {}
+current_server = None
+current_section = None  # 'main' or 'env'
+
+for line in config_text.split('\n'):
+    line = line.strip()
+    # Match [mcp_servers.NAME]
+    m = re.match(r'^\[mcp_servers\.([^.\]]+)\]$', line)
+    if m:
+        current_server = m.group(1)
+        servers[current_server] = {'command': '', 'args': [], 'env': {}}
+        current_section = 'main'
+        continue
+    # Match [mcp_servers.NAME.env]
+    m = re.match(r'^\[mcp_servers\.([^.\]]+)\.env\]$', line)
+    if m:
+        current_server = m.group(1)
+        current_section = 'env'
+        continue
+    # Match other section headers (end current server)
+    if line.startswith('['):
+        current_server = None
+        current_section = None
+        continue
+    if current_server and '=' in line:
+        key, val = line.split('=', 1)
+        key = key.strip()
+        val = val.strip().strip('\"')
+        if current_section == 'env':
+            servers[current_server]['env'][key] = val
+        elif key == 'command':
+            servers[current_server]['command'] = val
+        elif key == 'args':
+            # Parse TOML array
+            try:
+                servers[current_server]['args'] = json.loads(val.replace(\"'\", '\"'))
+            except:
+                pass
+
+# Filter out servers with no command (HTTP servers not supported in Claude)
+result = {k: v for k, v in servers.items() if v.get('command')}
+print(json.dumps(result))
+" 2>/dev/null)
+
+  if [ "$servers_json" = "{}" ] || [ -z "$servers_json" ]; then
+    echo "No STDIO MCP servers found in Codex config."
+    return 0
+  fi
+
+  # Check which already exist in Claude
+  local servers_to_add
+  servers_to_add=$(python3 -c "
+import json
+servers = json.loads('$(echo "$servers_json" | sed "s/'/'\\\\''/g")')
+existing = set()
+try:
+    d = json.load(open('$claude_settings'))
+    for path, cfg in d.get('projects', {}).items():
+        for name in cfg.get('mcpServers', {}):
+            existing.add(name)
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+for name in sorted(servers):
+    if name not in existing:
+        print(name)
+" 2>/dev/null)
+
+  if [ -z "$servers_to_add" ]; then
+    echo -e "${GREEN}All Codex MCP servers already exist in Claude.${NC}"
+    return 0
+  fi
+
+  echo -e "${CYAN}MCP servers to sync (Codex → Claude):${NC}"
+  echo ""
+  while IFS= read -r server_name; do
+    [ -z "$server_name" ] && continue
+    echo -e "  ${BOLD}$server_name${NC}"
+    python3 -c "
+import json
+s = json.loads('$(echo "$servers_json" | sed "s/'/'\\\\''/g")')
+srv = s['$server_name']
+print(f\"    command: {srv['command']} {' '.join(srv.get('args',[]))}\")
+for k in srv.get('env', {}):
+    print(f'    env: {k}=***')
+" 2>/dev/null
+    echo ""
+  done <<< "$servers_to_add"
+
+  if [ "$apply" = "true" ]; then
+    # Add to Claude settings.json — inject into the first project that has mcpServers
+    python3 -c "
+import json
+servers = json.loads('$(echo "$servers_json" | sed "s/'/'\\\\''/g")')
+to_add = '$(echo "$servers_to_add" | tr '\n' ',')'
+to_add = [s for s in to_add.strip(',').split(',') if s]
+
+d = json.load(open('$claude_settings'))
+# Add to all existing project configs that have mcpServers
+added_to = 0
+for path, cfg in d.get('projects', {}).items():
+    if 'mcpServers' in cfg:
+        for name in to_add:
+            if name not in cfg['mcpServers']:
+                cfg['mcpServers'][name] = servers[name]
+        added_to += 1
+
+# If no projects had mcpServers, we can't add blindly
+if added_to == 0:
+    print('No Claude projects with MCP config found. Add manually with: claude mcp add')
+else:
+    with open('$claude_settings', 'w') as f:
+        json.dump(d, f, indent=2)
+    print(f'Added to {added_to} Claude project configs.')
+" 2>/dev/null
+  else
+    echo -e "${YELLOW}Dry run — use 'crab agent sync mcp --apply' to write changes.${NC}"
+  fi
+}
+
+# Sync MCP servers bidirectionally based on --from flag
+agent_sync_mcp() {
+  local direction="${1:-auto}"
+  local apply="${2:-false}"
+
+  case "$direction" in
+    claude)
+      _sync_mcp_claude_to_codex "$apply"
+      ;;
+    codex)
+      _sync_mcp_codex_to_claude "$apply"
+      ;;
+    auto|*)
+      _sync_mcp_claude_to_codex "$apply"
+      echo ""
+      _sync_mcp_codex_to_claude "$apply"
+      ;;
+  esac
+}
+
+# Rewrite a Claude agent as a Codex skill using an LLM
+_rewrite_claude_agent_to_codex_skill() {
+  local agent_file="$1"
+  local apply="${2:-false}"
+  local agent_name=$(basename "$agent_file" .md)
+  local skill_dir="$HOME/.codex/skills/$agent_name"
+
+  if [ -d "$skill_dir" ] && [ "$apply" = "true" ]; then
+    echo -e "  ${YELLOW}Codex skill '$agent_name' already exists.${NC}"
+    read -p "  Overwrite? [y/N]: " overwrite
+    if [ "$overwrite" != "y" ] && [ "$overwrite" != "Y" ]; then
+      echo "  Skipped."
+      return 0
+    fi
+  fi
+
+  local agent_content
+  agent_content=$(cat "$agent_file")
+
+  local prompt="You are converting a Claude Code custom agent definition into an OpenAI Codex CLI skill.
+
+INPUT (Claude Code agent — markdown with YAML frontmatter):
+---
+$agent_content
+---
+
+OUTPUT REQUIREMENTS:
+- Produce a Codex SKILL.md file with YAML frontmatter containing only 'name' and 'description' fields
+- The description should explain when this skill triggers (this is how Codex matches skills to user requests)
+- Convert the body instructions to work with Codex's tool set (Codex uses shell commands, file I/O, not Claude's named tools like Read/Write/Grep)
+- Remove any Claude-specific references (Task tool, Agent tool, claude commands)
+- Keep the core logic and workflow intact
+- Output ONLY the SKILL.md content, nothing else — no explanation, no code fences"
+
+  echo -e "  ${CYAN}Translating $agent_name...${NC}"
+
+  local skill_content
+  if command -v codex &>/dev/null; then
+    skill_content=$(codex exec "$prompt" 2>/dev/null)
+  elif command -v claude &>/dev/null; then
+    skill_content=$(claude --print -p "$prompt" 2>/dev/null)
+  else
+    error "No LLM CLI available (need codex or claude)"
+    return 1
+  fi
+
+  if [ -z "$skill_content" ]; then
+    error "LLM returned empty output for $agent_name"
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Preview: $skill_dir/SKILL.md${NC}"
+  echo "  ─────────────────────────────────────"
+  echo "$skill_content" | head -30 | sed 's/^/  /'
+  if [ "$(echo "$skill_content" | wc -l)" -gt 30 ]; then
+    echo "  ... ($(echo "$skill_content" | wc -l) lines total)"
+  fi
+  echo "  ─────────────────────────────────────"
+  echo ""
+
+  if [ "$apply" = "true" ]; then
+    mkdir -p "$skill_dir"
+    echo "$skill_content" > "$skill_dir/SKILL.md"
+    echo -e "  ${GREEN}Created $skill_dir/SKILL.md${NC}"
+  else
+    echo -e "  ${YELLOW}Dry run — use --apply to write.${NC}"
+  fi
+}
+
+# Rewrite a Codex skill as a Claude agent using an LLM
+_rewrite_codex_skill_to_claude_agent() {
+  local skill_dir="$1"
+  local apply="${2:-false}"
+  local skill_name=$(basename "$skill_dir")
+  local agent_file="$HOME/.claude/agents/${skill_name}.md"
+
+  if [ -f "$agent_file" ] && [ "$apply" = "true" ]; then
+    echo -e "  ${YELLOW}Claude agent '$skill_name' already exists.${NC}"
+    read -p "  Overwrite? [y/N]: " overwrite
+    if [ "$overwrite" != "y" ] && [ "$overwrite" != "Y" ]; then
+      echo "  Skipped."
+      return 0
+    fi
+  fi
+
+  local skill_content
+  skill_content=$(cat "$skill_dir/SKILL.md")
+
+  local prompt="You are converting an OpenAI Codex CLI skill into a Claude Code custom agent definition.
+
+INPUT (Codex skill — SKILL.md with YAML frontmatter):
+---
+$skill_content
+---
+
+OUTPUT REQUIREMENTS:
+- Produce a Claude Code agent .md file with YAML frontmatter containing: name, description, tools, model
+- For 'tools', choose from: Bash, Read, Write, Edit, Grep, Glob, WebFetch, WebSearch (pick what the skill needs)
+- For 'model', use 'sonnet' (good default)
+- The description should explain when to use this agent
+- Convert any Codex-specific references to Claude Code equivalents
+- Keep the core logic and workflow intact
+- Output ONLY the agent .md content, nothing else — no explanation, no code fences"
+
+  echo -e "  ${CYAN}Translating $skill_name...${NC}"
+
+  local agent_content
+  if command -v codex &>/dev/null; then
+    agent_content=$(codex exec "$prompt" 2>/dev/null)
+  elif command -v claude &>/dev/null; then
+    agent_content=$(claude --print -p "$prompt" 2>/dev/null)
+  else
+    error "No LLM CLI available (need codex or claude)"
+    return 1
+  fi
+
+  if [ -z "$agent_content" ]; then
+    error "LLM returned empty output for $skill_name"
+    return 1
+  fi
+
+  echo ""
+  echo -e "  ${BOLD}Preview: $agent_file${NC}"
+  echo "  ─────────────────────────────────────"
+  echo "$agent_content" | head -30 | sed 's/^/  /'
+  if [ "$(echo "$agent_content" | wc -l)" -gt 30 ]; then
+    echo "  ... ($(echo "$agent_content" | wc -l) lines total)"
+  fi
+  echo "  ─────────────────────────────────────"
+  echo ""
+
+  if [ "$apply" = "true" ]; then
+    mkdir -p "$HOME/.claude/agents"
+    echo "$agent_content" > "$agent_file"
+    echo -e "  ${GREEN}Created $agent_file${NC}"
+  else
+    echo -e "  ${YELLOW}Dry run — use --apply to write.${NC}"
+  fi
+}
+
+# Sync agents/skills between Claude and Codex
+agent_sync_agents() {
+  local direction="${1:-auto}"
+  local apply="${2:-false}"
+
+  case "$direction" in
+    claude)
+      echo -e "${CYAN}Syncing Claude agents → Codex skills${NC}"
+      echo ""
+      local found=false
+      for agent_file in "$HOME/.claude/agents/"*.md; do
+        [ ! -f "$agent_file" ] && continue
+        local name=$(basename "$agent_file" .md)
+        if [ ! -d "$HOME/.codex/skills/$name" ]; then
+          found=true
+          _rewrite_claude_agent_to_codex_skill "$agent_file" "$apply"
+          echo ""
+        fi
+      done
+      if [ "$found" = "false" ]; then
+        echo -e "${GREEN}All Claude agents already have Codex skill equivalents.${NC}"
+      fi
+      ;;
+    codex)
+      echo -e "${CYAN}Syncing Codex skills → Claude agents${NC}"
+      echo ""
+      local found=false
+      for skill_dir in "$HOME/.codex/skills"/*/; do
+        [ ! -d "$skill_dir" ] && continue
+        echo "$skill_dir" | grep -q '\.system' && continue
+        [ ! -f "$skill_dir/SKILL.md" ] && continue
+        local name=$(basename "$skill_dir")
+        if [ ! -f "$HOME/.claude/agents/${name}.md" ]; then
+          found=true
+          _rewrite_codex_skill_to_claude_agent "$skill_dir" "$apply"
+          echo ""
+        fi
+      done
+      if [ "$found" = "false" ]; then
+        echo -e "${GREEN}All Codex skills already have Claude agent equivalents.${NC}"
+      fi
+      ;;
+    auto|*)
+      agent_sync_agents "claude" "$apply"
+      echo ""
+      agent_sync_agents "codex" "$apply"
+      ;;
+  esac
+}
+
+# Main agent sync handler
+handle_agent_sync_command() {
+  local subcmd="${1:-status}"
+  shift 2>/dev/null || true
+
+  # Parse flags
+  local direction="auto"
+  local apply="false"
+  local remaining_args=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from)
+        direction="${2:-auto}"
+        shift 2
+        ;;
+      --apply)
+        apply="true"
+        shift
+        ;;
+      --dry-run)
+        apply="false"
+        shift
+        ;;
+      *)
+        remaining_args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  case "$subcmd" in
+    "status"|"st")
+      agent_sync_status
+      ;;
+    "mcp")
+      agent_sync_mcp "$direction" "$apply"
+      ;;
+    "agents"|"skills")
+      agent_sync_agents "$direction" "$apply"
+      ;;
+    "all"|"sync")
+      echo -e "${BOLD}=== MCP Servers ===${NC}"
+      echo ""
+      agent_sync_mcp "$direction" "$apply"
+      echo ""
+      echo -e "${BOLD}=== Agents / Skills ===${NC}"
+      echo ""
+      agent_sync_agents "$direction" "$apply"
+      ;;
+    *)
+      echo -e "${CYAN}Agent Sync Commands:${NC}"
+      echo ""
+      echo "  crab agent status                  Show what's configured on each side"
+      echo "  crab agent sync mcp                Sync MCP servers between Claude & Codex"
+      echo "  crab agent sync agents             Sync custom agents/skills (LLM-assisted)"
+      echo "  crab agent sync all                Sync everything"
+      echo ""
+      echo "  Options:"
+      echo "    --from claude|codex              Sync from specific agent (default: both directions)"
+      echo "    --apply                          Apply changes (default: dry run)"
+      echo ""
+      echo "  Examples:"
+      echo "    crab agent sync mcp --from claude --apply"
+      echo "    crab agent sync agents --from claude --apply"
+      echo "    crab agent status"
+      echo ""
+      ;;
+  esac
+}
+
+# =============================================================================
 # Config Loading (using yq for YAML parsing)
 # =============================================================================
 
@@ -10139,7 +10773,7 @@ main() {
 
   # For project-aware commands, resolve project (cwd-first, then default)
   case "${1:-}" in
-    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"msg"|"message"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"draw"|"compare"|"diff"|"session"|"review"|"court"|"ticket"|"tkt")
+    ""|"ws"|"workspace"|"restart"|"reset"|"refresh"|"continue"|"resume"|"cleanup"|"clean"|"destroy"|"rm"|"remove"|"new"|"create"|"wip"|"save"|"config"|"doctor"|"ports"|"shared"|"status"|"snapshot"|"receive"|"handoff"|"rewind"|"timetravel"|"tt"|"pair"|"join"|"spectate"|"watch"|"mood"|"mobile"|"msg"|"message"|"slack"|"tk"|"toolkit"|"pf"|"promptfoo"|"draw"|"compare"|"diff"|"session"|"review"|"court"|"ticket"|"tkt"|"agent")
       if [ -z "$PROJECT_ALIAS" ]; then
         # Legacy migration check
         if is_legacy_config; then
@@ -10445,6 +11079,19 @@ main() {
           echo "    crab wip restore <N> --open     Restore and open workspace"
           echo ""
           echo "  Restores: branch, commits, staged/unstaged changes, submodules"
+          ;;
+      esac
+      ;;
+    "agent")
+      case "${2:-}" in
+        "sync")
+          handle_agent_sync_command "${@:3}"
+          ;;
+        "status"|"st")
+          agent_sync_status
+          ;;
+        *)
+          handle_agent_sync_command "help"
           ;;
       esac
       ;;
