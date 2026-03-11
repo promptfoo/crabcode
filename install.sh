@@ -208,11 +208,35 @@ echo '   ( •_•)  Installation complete!'
 echo -e "  /)${GREEN}🦀${NC}(\\"
 echo ' <      >'
 echo ""
-echo "You can use either 'crabcode' or 'crab' command."
+
+# Determine if PATH needs reloading and which profile to source
+if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+  # Figure out the right profile file for the message
+  case "$SHELL" in
+    */zsh)  _profile="$HOME/.zshrc" ;;
+    */bash)
+      if [[ -f "$HOME/.bash_profile" ]]; then
+        _profile="$HOME/.bash_profile"
+      else
+        _profile="$HOME/.bashrc"
+      fi
+      ;;
+    *)      _profile="$HOME/.profile" ;;
+  esac
+
+  echo -e "${YELLOW}┌─────────────────────────────────────────────────┐${NC}"
+  echo -e "${YELLOW}│  ⚠  Run this command before using crab:         │${NC}"
+  echo -e "${YELLOW}│                                                  │${NC}"
+  echo -e "${YELLOW}│    source $_profile${NC}"
+  echo -e "${YELLOW}│                                                  │${NC}"
+  echo -e "${YELLOW}│  Or just open a new terminal window.             │${NC}"
+  echo -e "${YELLOW}└─────────────────────────────────────────────────┘${NC}"
+  echo ""
+  echo "Then get started:"
+else
+  echo "Get started:"
+fi
+echo "  crab init          # create your config"
+echo "  crab ws 1          # start your first workspace"
+echo "  crab cheat         # quick reference"
 echo ""
-echo "Next steps:"
-echo "  1. Run 'source ~/.zshrc' (or open new terminal)"
-echo "  2. Run 'crab init' to create your config"
-echo "  3. Run 'crab ws 1' to start your first workspace"
-echo ""
-echo "Run 'crab cheat' for a quick reference."
