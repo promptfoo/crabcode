@@ -290,6 +290,19 @@ crab cheat               # Show cheat sheet
 crab update              # Self-update to latest version
 ```
 
+### Environment Migration (`crab env`)
+
+Capture your entire dev environment and restore it on a new machine. An AI agent explores your machine, builds a comprehensive setup recipe, and packages everything into an encrypted bundle.
+
+```bash
+crab env snapshot              # Agent explores machine → encrypted bundle
+crab env snapshot --dry-run    # Preview what would be captured
+crab env restore --from FILE   # Decrypt + agent sets up new machine
+crab env restore --from URL    # Download and restore from URL
+```
+
+The snapshot captures: Homebrew packages, Node/Python/Go versions, shell config, git identity, editor settings, database schemas, Docker config, cloud tools, project inventory, .env files, and API tokens — all encrypted with a password.
+
 ## Setup Flow
 
 ### 1. Register your project
@@ -459,6 +472,22 @@ With prefix `Ctrl+a`:
 | `Option+arrows` | Navigate panes |
 
 ## New Computer Setup
+
+### Fast path: Restore from snapshot
+
+If you have a `crab env` snapshot from your old machine:
+
+```bash
+# 1. Install crabcode
+curl -fsSL https://raw.githubusercontent.com/promptfoo/crabcode/main/install.sh | bash
+
+# 2. Restore everything
+crab env restore --from ~/path/to/snapshot.enc
+```
+
+The restore agent walks through each phase — installing tools, restoring configs, setting up projects — with your approval at each step.
+
+### Manual setup
 
 1. **Install dependencies:**
    ```bash
