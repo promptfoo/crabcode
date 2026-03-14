@@ -9977,8 +9977,38 @@ compare_show_help() {
   echo ""
   echo "Opens a beautiful side-by-side diff view in your default browser."
   echo "Supports syntax highlighting and both unified and side-by-side modes."
+  echo "Supports PDF files (requires pdftotext from poppler)."
   echo ""
   echo -e "${GRAY}Assets stored in: $COMPARE_ASSETS_DIR${NC}"
+}
+
+compare_is_pdf() {
+  local file="$1"
+  local ext="${file##*.}"
+  [[ "$ext" =~ ^[Pp][Dd][Ff]$ ]]
+}
+
+compare_pdf_to_text() {
+  local pdf_file="$1"
+  local txt_file="$2"
+
+  if command_exists pdftotext; then
+    pdftotext -layout "$pdf_file" "$txt_file" 2>/dev/null
+    return $?
+  else
+    error "PDF comparison requires 'pdftotext' (from poppler)."
+    echo ""
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+      echo -e "  Install with: ${BOLD}brew install poppler${NC}"
+    elif command_exists apt-get; then
+      echo -e "  Install with: ${BOLD}sudo apt-get install poppler-utils${NC}"
+    elif command_exists dnf; then
+      echo -e "  Install with: ${BOLD}sudo dnf install poppler-utils${NC}"
+    else
+      echo -e "  Install the 'poppler-utils' package for your system."
+    fi
+    return 1
+  fi
 }
 
 compare_ensure_assets() {
@@ -10047,7 +10077,40 @@ cmd_compare() {
     return 1
   fi
 
-  compare_ensure_assets || return 1
+  # PDF handling
+  local pdf1=false pdf2=false
+  local cleanup_files=()
+  compare_is_pdf "$file1" && pdf1=true
+  compare_is_pdf "$file2" && pdf2=true
+
+  if [ "$pdf1" = true ] && [ "$pdf2" = false ] || [ "$pdf1" = false ] && [ "$pdf2" = true ]; then
+    error "Cannot compare a PDF with a non-PDF file. Both files must be the same type."
+    return 1
+  fi
+
+  local diff_file1="$file1"
+  local diff_file2="$file2"
+
+  if [ "$pdf1" = true ] && [ "$pdf2" = true ]; then
+    local tmp_txt1="/tmp/crab-pdf1-$$.txt"
+    local tmp_txt2="/tmp/crab-pdf2-$$.txt"
+    cleanup_files+=("$tmp_txt1" "$tmp_txt2")
+
+    echo -e "${CYAN}Extracting text from PDFs...${NC}"
+    compare_pdf_to_text "$file1" "$tmp_txt1" || { rm -f "${cleanup_files[@]}"; return 1; }
+    compare_pdf_to_text "$file2" "$tmp_txt2" || { rm -f "${cleanup_files[@]}"; return 1; }
+
+    if [ ! -s "$tmp_txt1" ] && [ ! -s "$tmp_txt2" ]; then
+      echo -e "${YELLOW}Warning: Both PDFs produced empty text. They may be image-based (scanned) PDFs.${NC}"
+      rm -f "${cleanup_files[@]}"
+      return 1
+    fi
+
+    diff_file1="$tmp_txt1"
+    diff_file2="$tmp_txt2"
+  fi
+
+  compare_ensure_assets || { rm -f "${cleanup_files[@]}"; return 1; }
 
   local name1 name2
   name1=$(basename "$file1")
@@ -10056,7 +10119,10 @@ cmd_compare() {
 
   # Generate unified diff (don't fail on differences)
   local diff_output
-  diff_output=$(diff -u "$file1" "$file2" 2>/dev/null || true)
+  diff_output=$(diff -u --label "$name1" --label "$name2" "$diff_file1" "$diff_file2" 2>/dev/null || true)
+
+  # Clean up temp PDF text files
+  [ ${#cleanup_files[@]} -gt 0 ] && rm -f "${cleanup_files[@]}"
 
   # If files are identical
   if [ -z "$diff_output" ]; then
