@@ -10011,6 +10011,25 @@ compare_pdf_to_text() {
   fi
 }
 
+compare_ensure_poppler() {
+  if command_exists pdftotext; then
+    return 0
+  fi
+
+  echo -e "${CYAN}Installing poppler (for PDF comparison support)...${NC}"
+  if [[ "$OSTYPE" == "darwin"* ]] && command_exists brew; then
+    brew install poppler || { error "Failed to install poppler via brew."; return 1; }
+  elif command_exists apt-get; then
+    sudo apt-get install -y poppler-utils || { error "Failed to install poppler-utils via apt."; return 1; }
+  elif command_exists dnf; then
+    sudo dnf install -y poppler-utils || { error "Failed to install poppler-utils via dnf."; return 1; }
+  else
+    error "Could not auto-install poppler. Please install 'poppler-utils' manually."
+    return 1
+  fi
+  echo -e "${GREEN}poppler installed${NC}"
+}
+
 compare_ensure_assets() {
   local version_file="$COMPARE_ASSETS_DIR/.version"
 
@@ -10033,6 +10052,9 @@ compare_ensure_assets() {
     return 1
   fi
 
+  # Ensure poppler is available for PDF support
+  compare_ensure_poppler
+
   echo "$COMPARE_ASSETS_VERSION" > "$version_file"
   echo -e "${GREEN}Assets downloaded${NC}"
 }
@@ -10049,7 +10071,9 @@ cmd_compare() {
     "--update-assets"|"--update")
       rm -rf "$COMPARE_ASSETS_DIR"
       compare_ensure_assets
-      return $?
+      local rc=$?
+      compare_ensure_poppler
+      return $rc
       ;;
   esac
 
