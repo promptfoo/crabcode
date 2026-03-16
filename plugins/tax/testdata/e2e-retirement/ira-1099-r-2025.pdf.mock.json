@@ -1,0 +1,12 @@
+{
+  "payerOrIssuer": "Example Brokerage",
+  "taxYear": 2025,
+  "confidence": "high",
+  "fields": {
+    "gross_distribution": { "value": 5000, "sourcePage": 1 },
+    "taxable_amount": { "value": 5000, "sourcePage": 1 },
+    "federal_withholding": { "value": 500, "sourcePage": 1 },
+    "state_withholding": { "value": 200, "sourcePage": 1 },
+    "distribution_code": { "value": "7", "sourcePage": 1 }
+  }
+}

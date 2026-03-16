@@ -1,0 +1,9 @@
+{
+  "payerOrIssuer": "Chase Bank",
+  "taxYear": 2025,
+  "confidence": "high",
+  "fields": {
+    "interest_income": { "value": 412.34, "sourcePage": 1 },
+    "federal_withholding": { "value": 0, "sourcePage": 1 }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "payerOrIssuer": "Home Lender",
+  "taxYear": 2025,
+  "confidence": "high",
+  "fields": {
+    "mortgage_interest_received": { "value": 14300, "sourcePage": 1 },
+    "property_tax_paid": { "value": 6800, "sourcePage": 1 },
+    "points_paid": { "value": 0, "sourcePage": 1 }
+  }
+}
