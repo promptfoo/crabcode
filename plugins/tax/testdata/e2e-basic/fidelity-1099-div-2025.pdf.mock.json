@@ -1,0 +1,19 @@
+{
+  "payerOrIssuer": "Fidelity",
+  "taxYear": 2025,
+  "confidence": "high",
+  "fields": {
+    "ordinary_dividends": {
+      "value": 1840.12,
+      "sourcePage": 1
+    },
+    "qualified_dividends": {
+      "value": 1210.55,
+      "sourcePage": 1
+    },
+    "capital_gain_distributions": {
+      "value": 50,
+      "sourcePage": 1
+    }
+  }
+}

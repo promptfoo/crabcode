@@ -7577,6 +7577,117 @@ pf_help() {
 }
 
 # =============================================================================
+# Tax Plugin Commands
+# =============================================================================
+
+handle_tax_command() {
+  local PLUGIN_DIR="$CONFIG_DIR/plugins/tax"
+
+  case "${1:-}" in
+    "install")
+      tax_install
+      ;;
+    "uninstall"|"remove")
+      tax_uninstall
+      ;;
+    "update"|"upgrade")
+      tax_uninstall
+      tax_install
+      ;;
+    "help"|"-h"|"--help"|"")
+      tax_help
+      ;;
+    *)
+      if [ ! -d "$PLUGIN_DIR" ] || [ ! -f "$PLUGIN_DIR/dist/cli.js" ]; then
+        echo -e "${CYAN}Crab Tax - Tax document organizer${NC}"
+        echo ""
+        echo "Plugin not installed. Install with:"
+        echo ""
+        echo -e "  ${GREEN}crab tax install${NC}"
+        echo ""
+        return 1
+      fi
+      node "$PLUGIN_DIR/dist/cli.js" "$@"
+      ;;
+  esac
+}
+
+tax_install() {
+  local PLUGIN_DIR="$CONFIG_DIR/plugins/tax"
+  local REPO_URL="https://github.com/promptfoo/crabcode.git"
+  local BRANCH="main"
+
+  echo -e "${CYAN}Installing Crab Tax...${NC}"
+
+  if ! command_exists node; then
+    error "Node.js is required. Install with: brew install node"
+    return 1
+  fi
+
+  mkdir -p "$CONFIG_DIR/plugins"
+
+  local TEMP_DIR=$(mktemp -d)
+  echo "Cloning plugin from $REPO_URL..."
+
+  git clone --depth 1 --branch "$BRANCH" --filter=blob:none --sparse "$REPO_URL" "$TEMP_DIR" 2>/dev/null
+  cd "$TEMP_DIR"
+  git sparse-checkout set plugins/tax
+
+  rm -rf "$PLUGIN_DIR"
+  mv plugins/tax "$PLUGIN_DIR"
+  cd - >/dev/null
+  rm -rf "$TEMP_DIR"
+
+  echo "Installing dependencies..."
+  cd "$PLUGIN_DIR"
+  npm install --silent
+  npm run build --silent
+  cd - >/dev/null
+
+  success "✓ Installed to $PLUGIN_DIR"
+  echo ""
+  echo "Usage:"
+  echo -e "  ${GREEN}crab tax ./my-tax-docs${NC}                  # Inventory tax documents"
+  echo -e "  ${GREEN}crab tax ./my-tax-docs --output ./out${NC}    # Write outputs to a directory"
+  echo -e "  ${GREEN}crab tax --help${NC}                          # Show all options"
+}
+
+tax_uninstall() {
+  local PLUGIN_DIR="$CONFIG_DIR/plugins/tax"
+
+  if [ -d "$PLUGIN_DIR" ]; then
+    rm -rf "$PLUGIN_DIR"
+    success "✓ Uninstalled tax plugin"
+  else
+    echo "Plugin not installed"
+  fi
+}
+
+tax_help() {
+  echo -e "${CYAN}Crab Tax - Tax document organizer${NC}"
+  echo ""
+  echo "Organize tax documents and generate filing handoff outputs."
+  echo ""
+  echo -e "${BOLD}Installation:${NC}"
+  echo "  crab tax install               Install the plugin"
+  echo "  crab tax uninstall             Remove the plugin"
+  echo "  crab tax update                Update to latest version"
+  echo ""
+  echo -e "${BOLD}Usage:${NC}"
+  echo "  crab tax <input-dir>           Process a folder of tax documents"
+  echo "  crab tax <input-dir> --output ./out"
+  echo "  crab tax <input-dir> --profile ./profile.json"
+  echo ""
+  echo -e "${BOLD}Options:${NC}"
+  echo "  --output <dir>                 Output directory"
+  echo "  --profile <path>               Taxpayer profile JSON"
+  echo "  --tax-year <year>              Tax year (default: 2025)"
+  echo "  --filing-status <single|mfj>   Filing status"
+  echo "  --preview                      Allow preview outputs"
+  echo "  --verbose                      Show additional output"
+}
+
+# =============================================================================
 # Draw Plugin Commands
 # =============================================================================
 
@@ -9616,6 +9727,10 @@ main() {
     "pf"|"promptfoo")
       # Promptfoo target discovery agent
       handle_pf_command "${@:2}"
+      ;;
+    "tax")
+      # Tax document organizer plugin
+      handle_tax_command "${@:2}"
       ;;
     "draw")
       # Collaborative Excalidraw sessions

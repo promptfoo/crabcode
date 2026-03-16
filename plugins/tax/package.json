@@ -1,0 +1,23 @@
+{
+  "name": "@crabcode/tax",
+  "version": "0.1.0",
+  "description": "Tax document organizer and filing handoff plugin for crabcode",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "crab-tax": "./bin/crab-tax.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "node test/e2e.mjs && node test/classify.mjs && node test/deterministic.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

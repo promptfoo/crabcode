@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "0.1.0",
+  "taxYear": 2025,
+  "filingStatus": "single",
+  "state": "CA",
+  "fullYearResident": true,
+  "dependents": 0,
+  "estimatedPayments": [],
+  "iraContributions": [],
+  "scenarioFlags": {
+    "rsu": false,
+    "espp": false,
+    "inheritedShares": false
+  },
+  "reviewAnswers": {}
+}

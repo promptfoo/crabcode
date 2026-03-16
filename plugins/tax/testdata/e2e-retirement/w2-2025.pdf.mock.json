@@ -1,0 +1,11 @@
+{
+  "payerOrIssuer": "Example Employer Inc.",
+  "taxYear": 2025,
+  "confidence": "high",
+  "fields": {
+    "box1_wages": { "value": 90000, "sourcePage": 1 },
+    "box2_federal_withholding": { "value": 12000, "sourcePage": 1 },
+    "state_ca_wages": { "value": 90000, "sourcePage": 1 },
+    "state_ca_withholding": { "value": 5200, "sourcePage": 1 }
+  }
+}

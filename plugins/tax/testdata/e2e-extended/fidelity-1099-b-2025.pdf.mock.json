@@ -1,0 +1,13 @@
+{
+  "payerOrIssuer": "Fidelity",
+  "taxYear": 2025,
+  "confidence": "high",
+  "fields": {
+    "short_term_covered_proceeds": { "value": 18500, "sourcePage": 1 },
+    "short_term_covered_basis": { "value": 17900, "sourcePage": 1 },
+    "short_term_wash_sale_adjustments": { "value": 120, "sourcePage": 1 },
+    "long_term_covered_proceeds": { "value": 12000, "sourcePage": 1 },
+    "long_term_covered_basis": { "value": 9400, "sourcePage": 1 },
+    "long_term_wash_sale_adjustments": { "value": 0, "sourcePage": 1 }
+  }
+}

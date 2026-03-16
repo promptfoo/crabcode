@@ -197,6 +197,39 @@ pf: My API is at http://localhost:8080/chat, POST with JSON { "message": "the pr
 
 File attachments (API specs, curl commands) are also supported. Results are posted back to the Slack thread as downloadable files.
 
+### Tax Organizer (`crab tax`)
+
+Tax document organizer and deterministic filing handoff generator for supported 2025 federal + California personal return scenarios.
+
+```bash
+crab tax install                               # Install the plugin
+crab tax ./my-tax-docs                         # Process a folder of tax documents
+crab tax ./my-tax-docs --output ./tax-output   # Write outputs to a directory
+crab tax ./my-tax-docs --profile ./profile.json
+crab tax uninstall                             # Remove the plugin
+```
+
+**Supported inputs today:** `W-2`, `1099-INT`, `1099-DIV`, `1098`, `1099-B`, `1099-R`, `5498`, `1099-composite`, `property-tax-bill`
+
+**Outputs:**
+- `taxpayer_profile.json`
+- `documents.json`
+- `reconciliation.json`
+- `issues_to_review.json`
+- `federal_return_inputs.json`
+- `ca_return_inputs.json`
+- `estimate_summary.json`
+- `turbotax_handoff.md`
+
+See [plugins/tax/README.md](plugins/tax/README.md) for plugin-specific details.
+
+**Modes:**
+- Mock extraction via `.mock.json` sidecars for deterministic fixture testing
+- Live OpenAI extraction for supported PDFs/images when `OPENAI_API_KEY` is set
+- Bounded agent research for unknown or unsupported forms using tool calls plus official-source web search
+
+**Current scope:** single or MFJ, full-year California resident, no dependent-related federal credits, no RSU/ESPP handling, deterministic estimation for supported scenarios only
+
 ### Excalidraw Whiteboard (`crab draw`)
 
 Collaborative whiteboarding with real-time collab via Excalidraw.

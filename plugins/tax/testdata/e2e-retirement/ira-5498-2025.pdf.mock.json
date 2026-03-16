@@ -1,0 +1,9 @@
+{
+  "payerOrIssuer": "Example Brokerage",
+  "taxYear": 2025,
+  "confidence": "high",
+  "fields": {
+    "account_type": { "value": "traditional_ira", "sourcePage": 1 },
+    "contribution_amount": { "value": 7000, "sourcePage": 1 }
+  }
+}
