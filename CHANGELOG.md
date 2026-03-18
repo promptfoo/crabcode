@@ -2,51 +2,18 @@
 
 ## Unreleased
 
-### Changed
-
-- Codex is now the default agent when `agent:` is omitted, `crab court` uses a Codex judge, and the top-level docs/examples reflect Codex-first defaults
-
 ## [0.13.1](https://github.com/promptfoo/crabcode/compare/v0.13.0...v0.13.1) (2026-03-18)
 
 ### Features
 
-- add `crab compare` command for browser-based file diff ([ca26e5d](https://github.com/promptfoo/crabcode/commit/ca26e5da0834652a3c94084f443ca26fbfeedb3b))
-- add `crab md` command to render markdown in browser ([#40](https://github.com/promptfoo/crabcode/issues/40)) ([62798a1](https://github.com/promptfoo/crabcode/commit/62798a1e29e60fec2a48a30b831004706fc4042c))
-- add crab tax plugin ([#66](https://github.com/promptfoo/crabcode/issues/66)) ([da92a99](https://github.com/promptfoo/crabcode/commit/da92a99f9266624919f5d286f37e6937a2f1536a))
-- agent-agnostic codex support + bats test framework ([#52](https://github.com/promptfoo/crabcode/issues/52)) ([164a6be](https://github.com/promptfoo/crabcode/commit/164a6becd60a9f4ace59ac5001ac14005ff11f8b))
-- **agent:** add `crab agent sync` for cross-agent config migration ([#55](https://github.com/promptfoo/crabcode/issues/55)) ([7f9df47](https://github.com/promptfoo/crabcode/commit/7f9df47e7dc2293f66227541d7942c0341ef4149))
 - **compare:** add PDF file comparison support ([#63](https://github.com/promptfoo/crabcode/issues/63)) ([b27e82b](https://github.com/promptfoo/crabcode/commit/b27e82bc2865f283c809350666264fa3a545a91d))
 - **compare:** auto-install poppler for PDF support ([#64](https://github.com/promptfoo/crabcode/issues/64)) ([3046322](https://github.com/promptfoo/crabcode/commit/3046322b0efc6a9c9305be86507e0ff8524262ea))
-- **court,review:** allow starting fresh when session already exists ([412d7d3](https://github.com/promptfoo/crabcode/commit/412d7d3d2ac8012edea0d047fa38a75e63a72e0b))
-- **court:** enhance reviewer and judge prompts to catch silent data corruption ([#31](https://github.com/promptfoo/crabcode/issues/31)) ([f901632](https://github.com/promptfoo/crabcode/commit/f901632278897698ba32bf3ab910b105640ae7fc))
-- **crab-pf:** add --reasoning flag for GPT-5 reasoning_effort ([#34](https://github.com/promptfoo/crabcode/issues/34)) ([1cc404d](https://github.com/promptfoo/crabcode/commit/1cc404d861cee6435e97d13e8abd01095d17cb19))
-- **crab-pf:** default to gpt-5 with reasoning low ([#36](https://github.com/promptfoo/crabcode/issues/36)) ([916d46f](https://github.com/promptfoo/crabcode/commit/916d46f05c77a874470294e5be67fc13812bcad5))
+- add crab tax plugin ([#66](https://github.com/promptfoo/crabcode/issues/66)) ([da92a99](https://github.com/promptfoo/crabcode/commit/da92a99f9266624919f5d286f37e6937a2f1536a))
 - default crabcode to codex ([#69](https://github.com/promptfoo/crabcode/issues/69)) ([3c4db33](https://github.com/promptfoo/crabcode/commit/3c4db3345ffc359bf35460b16915ca33510d842c))
-- **draw:** add `crab draw open <path>` to open .excalidraw files from any location ([b71744d](https://github.com/promptfoo/crabcode/commit/b71744d6d1d6d34c722d96999809f78350380577))
-- **draw:** add `crab draw rename <id> "New Title"` command ([7b07a6d](https://github.com/promptfoo/crabcode/commit/7b07a6d54a0e0c12afedf7ba4a7ba29c64e3b24d))
-- **draw:** add collaborative Excalidraw plugin with real-time collab ([b013517](https://github.com/promptfoo/crabcode/commit/b01351793749e9e8db5fe0ea4e136255dd430b2f))
-- **draw:** make sessions global across workspaces ([ddfd891](https://github.com/promptfoo/crabcode/commit/ddfd891c9981afd3881cf39115ad918021b19068))
-- **draw:** support positional title — `crab draw "My Title"` ([be4ecf3](https://github.com/promptfoo/crabcode/commit/be4ecf35f14e4214fa5ab112c6bcb89db34d96b1))
-- **env:** add crab env snapshot/restore for machine migration ([#57](https://github.com/promptfoo/crabcode/issues/57)) ([1c21b02](https://github.com/promptfoo/crabcode/commit/1c21b029cd8fac814851889166f87e0ce41643f1))
-- **md:** add inline editing with split view, diff highlights, and save ([f4461f3](https://github.com/promptfoo/crabcode/commit/f4461f398c49404e07ecb9b873eb3e1736e5cedf))
-- **promptfoo:** add `crab pf serve` Slack polling daemon ([#37](https://github.com/promptfoo/crabcode/issues/37)) ([1ee6707](https://github.com/promptfoo/crabcode/commit/1ee670787e1fd5f2c4a8bc5ca684618d7bf08d14))
-- **wip:** save and restore Claude sessions across WIP save/restore ([b303372](https://github.com/promptfoo/crabcode/commit/b303372deaa1995eabb678bb5c23052eb677d834))
 
 ### Bug Fixes
 
-- **crab-pf:** replace broken verify with smoke+session test, add session handling ([#32](https://github.com/promptfoo/crabcode/issues/32)) ([3f5ee99](https://github.com/promptfoo/crabcode/commit/3f5ee994e5b3e7dfbd345b1af040825dc0ce26fd))
-- **crab-pf:** require test prompts to match provider input format ([#33](https://github.com/promptfoo/crabcode/issues/33)) ([b5017cb](https://github.com/promptfoo/crabcode/commit/b5017cb093fb157f7658c8c9cde3a662901b3f98))
 - **deps:** update dependency open to v11 ([4f717cb](https://github.com/promptfoo/crabcode/commit/4f717cbb69ce4783e86241a4b1a9a83687265d5f))
-- **draw:** remove project-alias scoping from global draw storage ([ad0f422](https://github.com/promptfoo/crabcode/commit/ad0f422e481ff33fc511a41b00fab07d73f36965))
-- force checkout in restart/cleanup to handle dirty worktrees ([fc37b80](https://github.com/promptfoo/crabcode/commit/fc37b80c67c46f2d7e648dc951dd0f16ddb78405))
-- **install:** make PATH warning prominent after install ([#56](https://github.com/promptfoo/crabcode/issues/56)) ([22cd4e5](https://github.com/promptfoo/crabcode/commit/22cd4e518ee60f27c6b7a7da8eb2ffbc8e2a546a))
-- **md:** decode UTF-8 correctly when rendering markdown in browser ([7e6b8b2](https://github.com/promptfoo/crabcode/commit/7e6b8b22783874ac88268a65bd26c12746b83782))
-- **msg:** stop say from repeating in listen mode ([#23](https://github.com/promptfoo/crabcode/issues/23)) ([473c3f6](https://github.com/promptfoo/crabcode/commit/473c3f6d85971ed6d5f8e687d6666d08dab281c6))
-- **test:** fix all 14 pre-existing test failures, add test isolation ([#29](https://github.com/promptfoo/crabcode/issues/29)) ([57f2080](https://github.com/promptfoo/crabcode/commit/57f20808c6e58e7abddf2b50afc159b41f5e9e9c))
-- **update:** bypass GitHub raw CDN cache for self-update ([#22](https://github.com/promptfoo/crabcode/issues/22)) ([29f04fa](https://github.com/promptfoo/crabcode/commit/29f04fabd70312b71d4e4939a36793fb94b0440a))
-- **wip:** restore to current workspace, show project-level WIPs by default ([c1eb24f](https://github.com/promptfoo/crabcode/commit/c1eb24fb75e4a69db65c8549587cbb01203cd64d))
-- **wip:** use target workspace branch when restoring cross-workspace ([8734bf6](https://github.com/promptfoo/crabcode/commit/8734bf615cc1fc4a261129c86d77d46d8e7277d5))
-- **ws:** avoid shell init prompts eating command keystrokes after respawn-pane ([967eb91](https://github.com/promptfoo/crabcode/commit/967eb910c8c0ab2d42cb35cef1d8f4a2bdd81a8a))
 
 ## [0.13.0] - 2026-03-11
 
