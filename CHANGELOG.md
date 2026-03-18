@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-## [0.12.0] - 2026-02-20
+### Changed
+
+- Codex is now the default agent when `agent:` is omitted, `crab court` uses a Codex judge, and the top-level docs/examples reflect Codex-first defaults
+
+## [0.13.0] - 2026-03-11
 
 ### Added
 

@@ -94,7 +94,7 @@ layout:
     - name: server
       command: pnpm dev
     - name: main
-      command: claude --dangerously-skip-permissions
+      command: codex --full-auto
 
 env_sync:
   files:
