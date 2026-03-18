@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [0.14.0](https://github.com/promptfoo/crabcode/compare/v0.13.1...v0.14.0) (2026-03-18)
+
+### Changed
+
+- Version alignment release: the Codex-default rollout introduced in `0.13.1` is being designated as `0.14.0`. There are no additional functional changes beyond `0.13.1`.
+
 ## [0.13.1](https://github.com/promptfoo/crabcode/compare/v0.13.0...v0.13.1) (2026-03-18)
 
 ### Features
