@@ -46,7 +46,7 @@ export class OpenAIProvider implements LLMProvider {
 
   constructor(options: { apiKey?: string; model?: string; baseUrl?: string; reasoningEffort?: string }) {
     this.apiKey = options.apiKey || process.env.OPENAI_API_KEY || '';
-    this.model = options.model || 'gpt-4o';
+    this.model = options.model || 'gpt-5';
     this.baseUrl = options.baseUrl || 'https://api.openai.com/v1';
     this.reasoningEffort = options.reasoningEffort;
 

@@ -7,7 +7,7 @@
   <      >
 ```
 
-A lightning-fast tmux-based workspace manager for multi-repo development. Agent-agnostic — works with both [Claude Code](https://claude.ai/code) and [Codex CLI](https://github.com/openai/codex). Manage multiple projects, start full dev environments in seconds.
+A lightning-fast tmux-based workspace manager for multi-repo development, built around [Codex CLI](https://github.com/openai/codex). Manage multiple projects, start full dev environments in seconds.
 
 ## Quick Start
 
@@ -260,9 +260,9 @@ crab court 3230                     # Judge + 2 reviewers
 ```
 
 **Court Review** uses the judge pattern:
-- **Judge (Claude)**: Orchestrates, verifies findings, delivers verdict
-- **Reviewer A (Claude teammate)**: Independent code review
-- **Reviewer B (Codex)**: Independent code review
+- **Judge (Codex)**: Orchestrates, verifies findings, delivers verdict
+- **Reviewer A (teammate pass)**: Independent code review
+- **Reviewer B (Codex)**: Secondary review pass
 
 The judge traces every finding to actual code, resolves disagreements, and produces a verdict with zero false positives.
 
@@ -286,14 +286,14 @@ crab session delete "feature-x"   # Delete a session
 
 ### Agent Sync (`crab agent`)
 
-Sync user-level configurations (MCP servers, custom agents/skills) between Claude Code and Codex CLI. Useful when switching a project's agent or maintaining parity across both.
+Sync user-level Codex configuration, MCP servers, and skills.
 
 ```bash
 crab agent status                              # Audit what's configured on each side
-crab agent sync mcp --from claude              # Preview MCP server sync (dry run)
-crab agent sync mcp --from claude --apply      # Sync MCP servers Claude → Codex
-crab agent sync agents --from claude           # Preview agent → skill rewrites (dry run)
-crab agent sync agents --from claude --apply   # Rewrite Claude agents as Codex skills (LLM-assisted)
+crab agent sync mcp                            # Preview MCP server sync (dry run)
+crab agent sync mcp --apply                    # Apply MCP server sync
+crab agent sync agents                         # Preview skill sync (dry run)
+crab agent sync agents --apply                 # Apply skill sync
 crab agent sync all --apply                    # Sync everything both directions
 ```
 
@@ -407,7 +407,7 @@ Per-project config (`~/.crabcode/projects/<alias>.yaml`):
 
 ```yaml
 session_name: pf
-agent: claude                # or "codex" — defaults to claude if omitted
+agent: codex                 # defaults to codex if omitted
 workspace_base: ~/Dev/my-project-workspaces
 main_repo: ~/Dev/my-project
 
@@ -430,7 +430,7 @@ layout:
     - name: server
       command: pnpm dev
     - name: main
-      command: claude --dangerously-skip-permissions  # or: codex --full-auto
+      command: ""            # defaults to codex --full-auto; override directly if needed
 
 # Optional: persistent storage across resets
 shared_volume:
@@ -457,18 +457,17 @@ See `examples/` for more configuration examples.
 - `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (for `crab pf`)
 - Slack bot token (for `crab pf serve`)
 
-**For AI agents (pick one or both):**
-- [Claude Code](https://claude.ai/code): `npm install -g @anthropic-ai/claude-code`
+**For AI agents:**
 - [Codex CLI](https://github.com/openai/codex): `npm install -g @openai/codex`
 
 **For PR reviews (`crab review`, `crab court`):**
 - [gh](https://cli.github.com/)
-- Claude Code and/or Codex CLI (court review uses both)
+- Codex CLI
 
 ```bash
 # macOS
 brew install tmux yq zip gh
-npm install -g @anthropic-ai/claude-code  # and/or @openai/codex
+npm install -g @openai/codex
 ```
 
 ## Installation
@@ -506,7 +505,7 @@ git pull origin main
 ┌─────────────────────────┬─────────────────────────┐
 │      terminal           │                         │
 │      (shell)            │        main             │
-├─────────────────────────┤   (claude/codex/editor)  │
+├─────────────────────────┤   (codex/editor)         │
 │      server             │                         │
 │      (pnpm dev)         │                         │
 └─────────────────────────┴─────────────────────────┘
@@ -573,9 +572,9 @@ The restore agent walks through each phase — installing tools, restoring confi
 6. **Edit config for your project:**
    ```bash
    # Set your layout commands in ~/.crabcode/projects/<alias>.yaml
-   # - agent: claude or codex (defaults to claude)
+   # - agent: codex (defaults to codex)
    # - server pane: your dev server (e.g., pnpm dev)
-   # - main pane: your agent command (e.g., claude --dangerously-skip-permissions, codex --full-auto)
+   # - main pane: optional override (defaults to codex --full-auto)
    ```
 
 7. **Start working:**

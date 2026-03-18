@@ -82,7 +82,7 @@ crab review https://github.com/...  # Full URL
 crab court 3230                     # Judge + 2 reviewers
 ```
 
-Court review uses the judge pattern: a Judge (Claude) orchestrates two independent reviewers (Claude teammate + Codex), verifies every finding against actual code, resolves disagreements, and delivers a verdict with zero false positives.
+Court review uses the judge pattern: a Codex-led judge by default orchestrates two independent review passes, verifies every finding against actual code, resolves disagreements, and delivers a verdict with zero false positives.
 
 ```bash
 crab review ls              # List review sessions
@@ -151,7 +151,7 @@ crab alias rm rr             # Remove alias
 
 ### Session Management
 
-Track and resume named Claude conversations:
+Track and resume named agent conversations:
 
 ```bash
 crab session ls              # List sessions
@@ -190,6 +190,7 @@ Per-project config (`~/.crabcode/projects/<alias>.yaml`):
 
 ```yaml
 session_name: pf
+agent: codex
 workspace_base: ~/Dev/my-project-workspaces
 main_repo: ~/Dev/my-project
 
@@ -213,7 +214,7 @@ layout:
     - name: server
       command: pnpm dev
     - name: main
-      command: claude
+      command: ""   # defaults to codex --full-auto
 
 # Persistent storage across workspace resets
 shared_volume:
@@ -243,7 +244,7 @@ slack:
 ┌─────────────────────────┬─────────────────────────┐
 │      terminal           │                         │
 │      (shell)            │        main             │
-├─────────────────────────┤   (claude/editor)       │
+├─────────────────────────┤   (codex/editor)        │
 │      server             │                         │
 │      (pnpm dev)         │                         │
 └─────────────────────────┴─────────────────────────┘
@@ -259,9 +260,7 @@ Keybindings (prefix: `Ctrl+a`):
 
 **Core:** bash, tmux, git, [yq](https://github.com/mikefarah/yq), zip
 
-**For PR reviews:** [gh](https://cli.github.com/) (GitHub CLI), [Claude Code](https://claude.ai/code) (`claude` CLI)
-
-**Optional:** [Codex CLI](https://github.com/openai/codex) (for court review with Codex reviewer)
+**For PR reviews:** [gh](https://cli.github.com/) (GitHub CLI), [Codex CLI](https://github.com/openai/codex) (`codex` CLI)
 
 ## Links
 
