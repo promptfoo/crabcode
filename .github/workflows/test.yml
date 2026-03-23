@@ -39,3 +39,20 @@ jobs:
 
       - name: Run shellcheck
         run: shellcheck --severity=error src/crabcode
+
+  ci-success:
+    name: CI Success
+    runs-on: ubuntu-latest
+    needs: [unit, lint]
+    if: always()
+    timeout-minutes: 5
+    permissions:
+      checks: read
+      statuses: read
+
+    steps:
+      - name: Wait for all PR checks to succeed
+        uses: promptfoo/.github/.github/actions/ci-success@main
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          timeout-seconds: 300
