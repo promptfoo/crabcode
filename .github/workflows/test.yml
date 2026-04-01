@@ -44,7 +44,9 @@ jobs:
     name: CI Success
     runs-on: ubuntu-latest
     needs: [unit, lint]
-    if: always()
+    # The shared action waits for all PR checks on this commit; on push to main
+    # it can also pick up unrelated branch checks (for example Dependabot).
+    if: ${{ always() && github.event_name == 'pull_request' }}
     timeout-minutes: 5
     permissions:
       checks: read
