@@ -25,6 +25,8 @@ export interface GeneratedConfig {
   envVars: Record<string, string>;
 }
 
+const DEFAULT_CONFIG_FILENAME = 'promptfooconfig.yaml';
+
 /**
  * Generate a promptfoo YAML config
  */
@@ -35,7 +37,7 @@ export function generateConfig(options: GenerateConfigOptions): GeneratedConfig 
     providerConfig,
     envVars = {},
     outputDir = '.',
-    filename = 'promptfooconfig.yaml',
+    filename = DEFAULT_CONFIG_FILENAME,
   } = options;
 
   // Validate providerConfig has required fields for http provider
@@ -101,11 +103,16 @@ ${Object.entries(envVars).map(([k, v]) => `#   ${k}: ${v}`).join('\n') || '#   (
   // Write the file
   const filePath = path.join(outputDir, filename);
   fs.writeFileSync(filePath, fullYaml, 'utf-8');
+  const verifyPath = DEFAULT_CONFIG_FILENAME;
+
+  if (verifyPath !== filename) {
+    fs.writeFileSync(path.join(outputDir, verifyPath), fullYaml, 'utf-8');
+  }
 
   return {
     yaml: fullYaml,
     filePath,
-    verifyPath: filename,
+    verifyPath,
     envVars,
   };
 }

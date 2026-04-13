@@ -14,21 +14,23 @@ afterEach(() => {
   }
 });
 
-describe('generateConfig output paths', () => {
-  it('returns a verify path relative to the output directory', () => {
+describe('generateConfig filename handling', () => {
+  it('keeps the requested filename while writing a stable verify config alias', () => {
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crabcode-config-'));
     tempDirs.push(outputDir);
 
     const generated = generateConfig({
-      description: 'Test config',
+      description: 'Custom filename config',
       providerType: 'http',
       providerConfig: { url: 'https://example.com', method: 'GET' },
       outputDir,
-      filename: 'nested-config.yaml',
+      filename: 'custom-config.yaml',
     });
 
-    expect(generated.filePath).toBe(path.join(outputDir, 'nested-config.yaml'));
+    expect(generated.filePath).toBe(path.join(outputDir, 'custom-config.yaml'));
     expect(generated.verifyPath).toBe('promptfooconfig.yaml');
-    expect(fs.existsSync(generated.filePath)).toBe(true);
+    expect(fs.readFileSync(generated.filePath, 'utf-8')).toBe(
+      fs.readFileSync(path.join(outputDir, generated.verifyPath), 'utf-8')
+    );
   });
 });
