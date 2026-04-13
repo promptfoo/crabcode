@@ -1,4 +1,6 @@
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export interface TunnelResult {
   url: string;
@@ -9,8 +11,30 @@ export interface TunnelResult {
 type TunnelBackend = 'cloudflared' | 'ngrok' | 'bore';
 
 function commandExists(cmd: string): boolean {
+  if (!cmd) {
+    return false;
+  }
+
+  if (cmd.includes(path.sep)) {
+    return isExecutable(cmd);
+  }
+
+  for (const entry of (process.env.PATH || '').split(path.delimiter)) {
+    if (!entry) {
+      continue;
+    }
+
+    if (isExecutable(path.join(entry, cmd))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isExecutable(filePath: string): boolean {
   try {
-    execSync(`command -v ${cmd}`, { stdio: 'ignore' });
+    fs.accessSync(filePath, fs.constants.X_OK);
     return true;
   } catch {
     return false;
