@@ -41,6 +41,7 @@ export interface ToolResult {
 
 interface AgentState {
   configFile?: string;
+  verifyConfigFile?: string;
   providerFile?: string;
   envVars: Record<string, string>;
   verified: boolean;
@@ -248,6 +249,7 @@ async function executeTool(
         });
 
         state.configFile = generated.filePath;
+        state.verifyConfigFile = generated.verifyPath;
         state.envVars = { ...state.envVars, ...generated.envVars };
 
         result = {
@@ -277,7 +279,7 @@ async function executeTool(
           configFile?: string;
         };
 
-        const configPath = configFile || state.configFile || 'promptfooconfig.yaml';
+        const configPath = configFile || state.verifyConfigFile || 'promptfooconfig.yaml';
         const steps: string[] = [];
 
         // Step 1: Direct provider smoke + session test

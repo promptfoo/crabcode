@@ -21,6 +21,7 @@ export interface GenerateConfigOptions {
 export interface GeneratedConfig {
   yaml: string;
   filePath: string;
+  verifyPath: string;
   envVars: Record<string, string>;
 }
 
@@ -104,6 +105,7 @@ ${Object.entries(envVars).map(([k, v]) => `#   ${k}: ${v}`).join('\n') || '#   (
   return {
     yaml: fullYaml,
     filePath,
+    verifyPath: filename,
     envVars,
   };
 }
