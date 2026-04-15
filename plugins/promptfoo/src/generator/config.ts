@@ -167,12 +167,12 @@ export function writeProviderFile(options: {
 function detectDependencies(code: string): Record<string, string> {
   const deps: Record<string, string> = {};
 
-  // Match: import X from 'package' or import { X } from 'package'
-  const importRegex = /import\s+(?:[\w{}\s,*]+)\s+from\s+['"]([^'"./][^'"]*)['"]/g;
-  let match;
+  for (const line of code.split(/\r?\n/)) {
+    const pkg = extractImportSpecifier(line);
+    if (!pkg) {
+      continue;
+    }
 
-  while ((match = importRegex.exec(code)) !== null) {
-    const pkg = match[1];
     // Skip node built-ins
     if (!pkg.startsWith('node:')) {
       // Common package versions
@@ -186,6 +186,33 @@ function detectDependencies(code: string): Record<string, string> {
   }
 
   return deps;
+}
+
+function extractImportSpecifier(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('import ')) {
+    return null;
+  }
+
+  const fromIndex = trimmed.indexOf(' from ');
+  const specifierStart = fromIndex >= 0 ? fromIndex + 6 : 'import '.length;
+  const quote = trimmed[specifierStart];
+
+  if (quote !== '"' && quote !== "'") {
+    return null;
+  }
+
+  const specifierEnd = trimmed.indexOf(quote, specifierStart + 1);
+  if (specifierEnd === -1) {
+    return null;
+  }
+
+  const specifier = trimmed.slice(specifierStart + 1, specifierEnd);
+  if (specifier.startsWith('.') || specifier.startsWith('/')) {
+    return null;
+  }
+
+  return specifier;
 }
 
 /**
