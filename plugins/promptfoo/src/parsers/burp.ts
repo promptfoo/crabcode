@@ -42,11 +42,7 @@ export function parseBurpSingle(xml: string): ParsedArtifact {
 function extractItems(xml: string): BurpItem[] {
   const items: BurpItem[] = [];
 
-  // Match <item> elements
-  const itemMatches = xml.matchAll(/<item>([\s\S]*?)<\/item>/gi);
-
-  for (const match of itemMatches) {
-    const itemXml = match[1];
+  for (const itemXml of extractElementContents(xml, 'item')) {
 
     const url = extractTag(itemXml, 'url');
     const host = extractTag(itemXml, 'host');
@@ -67,6 +63,31 @@ function extractItems(xml: string): BurpItem[] {
         request,
       });
     }
+  }
+
+  return items;
+}
+
+function extractElementContents(xml: string, tag: string): string[] {
+  const items: string[] = [];
+  const openTag = `<${tag}>`;
+  const closeTag = `</${tag}>`;
+  let startIndex = 0;
+
+  while (startIndex < xml.length) {
+    const openIndex = xml.indexOf(openTag, startIndex);
+    if (openIndex === -1) {
+      break;
+    }
+
+    const contentStart = openIndex + openTag.length;
+    const closeIndex = xml.indexOf(closeTag, contentStart);
+    if (closeIndex === -1) {
+      break;
+    }
+
+    items.push(xml.slice(contentStart, closeIndex));
+    startIndex = closeIndex + closeTag.length;
   }
 
   return items;
