@@ -14,7 +14,7 @@ import type { LLMProvider, Message, ToolCall, ChatResponse } from './providers.j
 import type { DiscoveryResult } from '../types.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export interface AgentOptions {
@@ -41,6 +41,7 @@ export interface ToolResult {
 
 interface AgentState {
   configFile?: string;
+  verifyConfigFile?: string;
   providerFile?: string;
   envVars: Record<string, string>;
   verified: boolean;
@@ -193,6 +194,19 @@ Steps:
   };
 }
 
+export function runPromptfooEval(outputDir: string, configPath: string): string {
+  return execFileSync(
+    'npx',
+    ['promptfoo', 'eval', '-c', configPath, '--no-progress-bar'],
+    {
+      cwd: outputDir,
+      timeout: 120000,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }
+  );
+}
+
 /**
  * Execute a single tool call
  */
@@ -248,6 +262,7 @@ async function executeTool(
         });
 
         state.configFile = generated.filePath;
+        state.verifyConfigFile = generated.verifyPath;
         state.envVars = { ...state.envVars, ...generated.envVars };
 
         result = {
@@ -277,7 +292,7 @@ async function executeTool(
           configFile?: string;
         };
 
-        const configPath = configFile || state.configFile || 'promptfooconfig.yaml';
+        const configPath = configFile || state.verifyConfigFile || 'promptfooconfig.yaml';
         const steps: string[] = [];
 
         // Step 1: Direct provider smoke + session test
@@ -329,10 +344,7 @@ async function executeTool(
 
         // Step 2: Run promptfoo eval
         try {
-          const output = execSync(
-            `cd "${outputDir}" && npx promptfoo eval -c "${configPath}" --no-progress-bar 2>&1`,
-            { timeout: 120000, encoding: 'utf-8' }
-          );
+          const output = runPromptfooEval(outputDir, configPath);
 
           const passMatch = output.match(/(\d+) passed/);
           const failMatch = output.match(/(\d+) failed/);
@@ -360,13 +372,15 @@ async function executeTool(
             steps,
           };
         } catch (error) {
-          const err = error as { message: string; stdout?: string; stderr?: string };
-          const stdout = err.stdout || '';
+          const err = error as { message: string; stdout?: string | Buffer; stderr?: string | Buffer };
+          const stdout = typeof err.stdout === 'string' ? err.stdout : err.stdout?.toString('utf-8') || '';
+          const stderr = typeof err.stderr === 'string' ? err.stderr : err.stderr?.toString('utf-8') || '';
+          const combinedOutput = stdout + stderr;
 
-          const passMatch = stdout.match(/(\d+) passed/);
+          const passMatch = combinedOutput.match(/(\d+) passed/);
           const passed = passMatch ? parseInt(passMatch[1]) : 0;
 
-          if (passed > 0 && !stdout.includes('failed')) {
+          if (passed > 0 && !combinedOutput.includes('failed')) {
             steps.push(`Eval PASSED (non-zero exit): ${passed} passed`);
             state.verified = true;
           } else {
@@ -377,7 +391,7 @@ async function executeTool(
           result = {
             success: state.verified,
             error: state.verified ? undefined : err.message,
-            stdout: stdout.slice(0, 1000),
+            stdout: combinedOutput.slice(0, 1000),
             steps,
           };
         }
