@@ -14,7 +14,7 @@ import type { LLMProvider, Message, ToolCall, ChatResponse } from './providers.j
 import type { DiscoveryResult } from '../types.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export interface AgentOptions {
@@ -193,6 +193,15 @@ Steps:
   };
 }
 
+export function installProviderDependencies(outputDir: string): void {
+  execFileSync('npm', ['install', '--silent'], {
+    cwd: outputDir,
+    timeout: 60000,
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
 /**
  * Execute a single tool call
  */
@@ -287,10 +296,7 @@ async function executeTool(
           const packageJsonPath = path.join(outputDir, 'package.json');
           if (fs.existsSync(packageJsonPath)) {
             try {
-              execSync(`cd "${outputDir}" && npm install --silent 2>&1`, {
-                timeout: 60000,
-                encoding: 'utf-8',
-              });
+              installProviderDependencies(outputDir);
             } catch {
               // Ignore install errors, will surface in import
             }
