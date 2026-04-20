@@ -24,7 +24,7 @@ export function parseCurl(command: string): ParsedArtifact {
   // Remove comments and normalize whitespace
   const cleaned = raw
     .split('\n')
-    .map((line) => line.replace(/#.*$/, '').trim())
+    .map((line) => stripInlineComment(line).trim())
     .join(' ')
     .replace(/\\\s+/g, ' ') // Handle line continuations
     .replace(/\s+/g, ' ')
@@ -74,6 +74,43 @@ export function parseCurl(command: string): ParsedArtifact {
     cookies: Object.keys(state.cookies).length > 0 ? state.cookies : undefined,
     raw,
   };
+}
+
+function stripInlineComment(line: string): string {
+  let inQuote: string | null = null;
+  let escaped = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (inQuote) {
+      if (char === inQuote) {
+        inQuote = null;
+      }
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      inQuote = char;
+      continue;
+    }
+
+    if (char === '#') {
+      return line.slice(0, i);
+    }
+  }
+
+  return line;
 }
 
 /**
