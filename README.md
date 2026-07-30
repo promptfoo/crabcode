@@ -51,6 +51,8 @@ crab projects          # list all registered projects
 
 Use `crab` (or `crabcode`) for all commands.
 
+Run `crab version` (or `crab --version`) to check the installed version.
+
 ### Workspace Commands (`crab ws`)
 
 ```bash
