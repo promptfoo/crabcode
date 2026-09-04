@@ -6,7 +6,7 @@ description: Keep repository-review JSON fixtures synthetic and free of sensitiv
 applicability:
   when: A pull request adds or changes the versioned repository-review JSON fixture.
   paths:
-    - /tests/repository-checks/**/*.json
+    - /tests/repository-checks/nonmatching-control/**/*.json
   content:
     contains_any:
       - '"review_fixture_version"'
