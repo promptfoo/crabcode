@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.14.1](https://github.com/promptfoo/crabcode/compare/v0.14.0...v0.14.1) (2026-09-04)
+
+### Bug Fixes
+
+- **deps:** update react monorepo to v19 ([#105](https://github.com/promptfoo/crabcode/issues/105)) ([454106b](https://github.com/promptfoo/crabcode/commit/454106bdfb5bd61bbdf20414422c6df66128982a))
+- draw ui dependabot alerts ([#102](https://github.com/promptfoo/crabcode/issues/102)) ([a00a14b](https://github.com/promptfoo/crabcode/commit/a00a14b9946e7de3e346f50dab3c205ad082a9ad))
+
 ## [0.14.0](https://github.com/promptfoo/crabcode/compare/v0.13.1...v0.14.0) (2026-03-18)
 
 ### Changed
