@@ -8,7 +8,4 @@ SAMPLE = {
 
 
 def public_sample():
-    return {
-        "sample_id": SAMPLE["sample_id"],
-        "display_name": SAMPLE["display_name"],
-    }
+    return dict(SAMPLE)
