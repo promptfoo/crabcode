@@ -23,6 +23,11 @@ export interface HttpServerOptions {
   saveElements: (elements: ExcalidrawElement[]) => void;
 }
 
+function resolveAssetPath(rootDir: string, requestPath: string): string {
+  const decodedPath = decodeURIComponent(requestPath);
+  return path.resolve(rootDir, `.${decodedPath}`);
+}
+
 export function createHttpServer(opts: HttpServerOptions): http.Server {
   // UI dist is at plugins/draw/ui/dist/ relative to compiled server at plugins/draw/dist/server/
   const uiDistDir = path.resolve(__dirname, '..', '..', 'ui', 'dist');
@@ -59,14 +64,7 @@ export function createHttpServer(opts: HttpServerOptions): http.Server {
 
     // Serve static UI files
     let filePath = url.pathname === '/' ? '/index.html' : url.pathname;
-    const fullPath = path.join(uiDistDir, filePath);
-
-    // Security: prevent directory traversal
-    if (!fullPath.startsWith(uiDistDir)) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
-    }
+    const fullPath = resolveAssetPath(uiDistDir, filePath);
 
     if (!fs.existsSync(fullPath) || fs.statSync(fullPath).isDirectory()) {
       // SPA fallback: serve index.html for unmatched routes
