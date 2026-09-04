@@ -21,3 +21,6 @@ The integration test should verify:
 A clean result is expected. These fixtures must not contain real secrets, expose a
 service, execute commands, or introduce a vulnerability. A clean GitHub comment
 alone does not prove that the optional check loaded; confirm that in the trace.
+
+Selector control: mentioning `"review_fixture_version"` in this Markdown file
+does not make it an eligible JSON fixture.

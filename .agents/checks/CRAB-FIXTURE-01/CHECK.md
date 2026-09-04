@@ -18,6 +18,8 @@ hints:
 
 # Synthetic review fixtures
 
+<!-- Integration control: documentation-only change; policy behavior is unchanged. -->
+
 Review the eligible JSON changes for accidentally committed credentials, private
 documents, or real personal data. Fixture records must use clearly synthetic
 values. Keep the assessment within the assigned files and the repository's
