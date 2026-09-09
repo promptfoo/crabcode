@@ -57,6 +57,20 @@ export function createHttpServer(opts: HttpServerOptions): http.Server {
       return;
     }
 
+    // API: preview a drawing session file
+    if (url.pathname === '/api/session/file' && req.method === 'GET') {
+      const requestedPath = url.searchParams.get('path');
+      if (!requestedPath) {
+        res.writeHead(400);
+        res.end('Missing file path');
+        return;
+      }
+
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(fs.readFileSync(requestedPath, 'utf-8'));
+      return;
+    }
+
     // Serve static UI files
     let filePath = url.pathname === '/' ? '/index.html' : url.pathname;
     const fullPath = path.join(uiDistDir, filePath);
