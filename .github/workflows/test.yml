@@ -66,6 +66,7 @@ jobs:
         working-directory: plugins/draw/ui
       - run: npm run build
         working-directory: plugins/draw/ui
+      - run: npm run test:integration
 
   ci-success:
     name: CI Success
