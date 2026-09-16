@@ -12,7 +12,8 @@
     "build:server": "tsc",
     "build:ui": "cd ui && npm install && npm run build",
     "dev": "tsc --watch",
-    "test": "npm run build:server && node --test test/*.test.mjs"
+    "test": "npm run build:server && node --test test/*.test.mjs",
+    "test:integration": "npm run build:server && node --test test/integration/*.test.mjs"
   },
   "dependencies": {
     "nanoid": "^5.1.16",
