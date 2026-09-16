@@ -1,0 +1,10 @@
+{
+  "review_fixture_version": 1,
+  "synthetic": true,
+  "records": [
+    {
+      "record_id": "sample-a",
+      "display_name": "Synthetic Sample A"
+    }
+  ]
+}
