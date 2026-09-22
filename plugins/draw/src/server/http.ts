@@ -44,9 +44,12 @@ export function createHttpServer(opts: HttpServerOptions): http.Server {
       req.on('end', () => {
         try {
           const data = JSON.parse(body);
-          if (Array.isArray(data.elements)) {
-            opts.saveElements(data.elements);
+          if (!Array.isArray(data?.elements)) {
+            res.writeHead(400);
+            res.end('Expected an elements array');
+            return;
           }
+          opts.saveElements(data.elements);
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true }));
         } catch {
