@@ -16,7 +16,7 @@
     "test:integration": "npm run build:server && node --test test/integration/*.test.mjs"
   },
   "dependencies": {
-    "nanoid": "^5.1.16",
+    "nanoid": "^6.0.0",
     "open": "^11.0.0",
     "socket.io": "^4.8.0"
   },
