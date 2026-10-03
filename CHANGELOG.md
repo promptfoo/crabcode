@@ -4,18 +4,16 @@
 
 ## [0.14.1](https://github.com/promptfoo/crabcode/compare/v0.14.0...v0.14.1) (2026-10-03)
 
-
 ### Features
 
-* add version subcommand ([#128](https://github.com/promptfoo/crabcode/issues/128)) ([9d9c8e6](https://github.com/promptfoo/crabcode/commit/9d9c8e6a3405b78c06d2ca17ca27020e51c0bdff))
-* **env:** add crab env encrypt command ([#68](https://github.com/promptfoo/crabcode/issues/68)) ([0e7d584](https://github.com/promptfoo/crabcode/commit/0e7d584aaaab50c8ef27c98a82737236dcec67c0))
-
+- add version subcommand ([#128](https://github.com/promptfoo/crabcode/issues/128)) ([9d9c8e6](https://github.com/promptfoo/crabcode/commit/9d9c8e6a3405b78c06d2ca17ca27020e51c0bdff))
+- **env:** add crab env encrypt command ([#68](https://github.com/promptfoo/crabcode/issues/68)) ([0e7d584](https://github.com/promptfoo/crabcode/commit/0e7d584aaaab50c8ef27c98a82737236dcec67c0))
 
 ### Bug Fixes
 
-* **deps:** update react monorepo to v19 ([#105](https://github.com/promptfoo/crabcode/issues/105)) ([454106b](https://github.com/promptfoo/crabcode/commit/454106bdfb5bd61bbdf20414422c6df66128982a))
-* draw ui dependabot alerts ([#102](https://github.com/promptfoo/crabcode/issues/102)) ([a00a14b](https://github.com/promptfoo/crabcode/commit/a00a14b9946e7de3e346f50dab3c205ad082a9ad))
-* **draw:** restore collaborative UI and patch pinned dependencies ([#118](https://github.com/promptfoo/crabcode/issues/118)) ([f6d0c12](https://github.com/promptfoo/crabcode/commit/f6d0c12ace35e58d6261a45e786ba378813b6850))
+- **deps:** update react monorepo to v19 ([#105](https://github.com/promptfoo/crabcode/issues/105)) ([454106b](https://github.com/promptfoo/crabcode/commit/454106bdfb5bd61bbdf20414422c6df66128982a))
+- draw ui dependabot alerts ([#102](https://github.com/promptfoo/crabcode/issues/102)) ([a00a14b](https://github.com/promptfoo/crabcode/commit/a00a14b9946e7de3e346f50dab3c205ad082a9ad))
+- **draw:** restore collaborative UI and patch pinned dependencies ([#118](https://github.com/promptfoo/crabcode/issues/118)) ([f6d0c12](https://github.com/promptfoo/crabcode/commit/f6d0c12ace35e58d6261a45e786ba378813b6850))
 
 ## [0.14.0](https://github.com/promptfoo/crabcode/compare/v0.13.1...v0.14.0) (2026-03-18)
 
