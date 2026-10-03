@@ -18,6 +18,7 @@
 #   config scan       Auto-detect .env files and ports
 #   doctor            Diagnose common issues
 #   cheat             Show cheat sheet / help
+#   version           Show the installed crabcode version
 #   ports             Show port usage across workspaces
 #   wip save          Save work in progress
 #   wip ls            List saved WIP states
@@ -8261,6 +8262,7 @@ show_help() {
   echo "  ports             Show port usage"
   echo "  shared            Show shared volume info"
   echo "  cheat             Show cheat sheet"
+  echo "  version           Show the installed crabcode version"
   echo ""
   echo "Config: $CONFIG_FILE"
 }
@@ -12090,7 +12092,7 @@ main() {
       fi
       rm -f "$tmp_file"
       ;;
-    "--version"|"-v")
+    "version"|"--version"|"-v")
       echo '  /)🦀(\'
       echo "crabcode v$VERSION"
       ;;
