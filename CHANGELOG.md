@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## [0.14.1](https://github.com/promptfoo/crabcode/compare/v0.14.0...v0.14.1) (2026-10-03)
+
+### Features
+
+- Add `crab version` as an alias for checking the installed version ([#128](https://github.com/promptfoo/crabcode/pull/128)).
+- Add `crab env encrypt <staging-dir> [output-file]` to retry snapshot encryption without rerunning the agent. Preserve staging on failure, reject existing backups and output inside staging, and handle relative paths and names beginning with a dash ([#68](https://github.com/promptfoo/crabcode/pull/68)).
+
+### Bug Fixes
+
+- Restore Draw canvas styling, initialize collaboration after the Excalidraw API is ready, and display collaborator cursors. Browser checks cover Mermaid conversion, shared edits, and scene reloads ([#118](https://github.com/promptfoo/crabcode/pull/118)).
+- Patch Nano ID and lodash-es versions pinned inside Excalidraw dependencies, and update Sass to remove the vulnerable Chokidar/Braces chain ([#118](https://github.com/promptfoo/crabcode/pull/118)).
+- Upgrade Zod to v4 ([#50](https://github.com/promptfoo/crabcode/pull/50)), Excalidraw to v0.18.1 ([#104](https://github.com/promptfoo/crabcode/pull/104)), and React to v19 ([#105](https://github.com/promptfoo/crabcode/pull/105)).
+- Address Draw UI dependency alerts ([#102](https://github.com/promptfoo/crabcode/pull/102)) and refresh plugin locks with patched Engine.IO, Socket.IO parser, Immutable, DOMPurify, Mermaid, PostCSS, Vite, and Vitest dependencies ([#116](https://github.com/promptfoo/crabcode/pull/116), [#130](https://github.com/promptfoo/crabcode/pull/130)).
+- Load Node type definitions explicitly so the Tax plugin compiles, and keep the Draw UI lockfile installable with npm 10 and 11 ([#116](https://github.com/promptfoo/crabcode/pull/116)).
+
+### Development
+
+- Upgrade all plugin compilers to TypeScript 7.0.2 and require at least Vite 8.0.16 and Vitest 4.1.11, while retaining Node 20/22/24 support ([#125](https://github.com/promptfoo/crabcode/pull/125)).
+- Build and test every plugin on Node 20, 22, and 24; add Draw UI type checking and Promptfoo parser/configuration smoke tests ([#116](https://github.com/promptfoo/crabcode/pull/116), [#125](https://github.com/promptfoo/crabcode/pull/125)).
+- Update the pinned checkout, setup-node, and CI aggregation actions ([#124](https://github.com/promptfoo/crabcode/pull/124), [#153](https://github.com/promptfoo/crabcode/pull/153), [#154](https://github.com/promptfoo/crabcode/pull/154)).
+
 ## [0.14.0](https://github.com/promptfoo/crabcode/compare/v0.13.1...v0.14.0) (2026-03-18)
 
 ### Changed
