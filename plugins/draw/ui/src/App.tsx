@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Excalidraw } from '@excalidraw/excalidraw';
-import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types';
+import type { Collaborator, ExcalidrawImperativeAPI, SocketId } from '@excalidraw/excalidraw/types';
 import { CollabClient } from './collab/client';
 
 function getUrlParams(): { room: string; name: string } {
@@ -96,9 +96,9 @@ export default function App() {
   const [username, setUsername] = useState<string>(urlName || '');
   const [initialData, setInitialData] = useState<{ elements: any[] } | null>(null);
   const [loading, setLoading] = useState(true);
-  const excalidrawApiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const [excalidrawApi, setExcalidrawApi] = useState<ExcalidrawImperativeAPI | null>(null);
   const collabRef = useRef<CollabClient | null>(null);
-  const [collaborators, setCollaborators] = useState<Map<string, any>>(new Map());
+  const [collaborators, setCollaborators] = useState<Map<SocketId, Collaborator>>(new Map());
 
   const handleNameSubmit = useCallback((name: string) => {
     setUsername(name);
@@ -121,17 +121,23 @@ export default function App() {
 
   // Initialize collab once we have a username and excalidraw API
   useEffect(() => {
-    if (!username || loading || !excalidrawApiRef.current) return;
+    if (!username || loading || !excalidrawApi) return;
 
-    const api = excalidrawApiRef.current;
     const collab = new CollabClient({
       roomId: room,
       username,
       onRemoteSceneUpdate: (elements) => {
-        api.updateScene({ elements });
+        excalidrawApi.updateScene({ elements });
       },
       onCollaboratorsChange: (collabs) => {
-        setCollaborators(new Map(collabs));
+        setCollaborators(new Map<SocketId, Collaborator>(Array.from(collabs, ([id, collaborator]) => [
+          id as SocketId,
+          {
+            username: collaborator.username,
+            color: { background: collaborator.color, stroke: collaborator.color },
+            pointer: { ...collaborator.pointer, tool: 'pointer' },
+          },
+        ])));
       },
     });
 
@@ -140,8 +146,13 @@ export default function App() {
 
     return () => {
       collab.disconnect();
+      collabRef.current = null;
     };
-  }, [username, loading, room]);
+  }, [username, loading, room, excalidrawApi]);
+
+  useEffect(() => {
+    excalidrawApi?.updateScene({ collaborators });
+  }, [excalidrawApi, collaborators]);
 
   // Handle scene changes
   const handleChange = useCallback(
@@ -181,9 +192,7 @@ export default function App() {
   return (
     <div style={{ width: '100%', height: '100%' }}>
       <Excalidraw
-        excalidrawAPI={(api) => {
-          excalidrawApiRef.current = api;
-        }}
+        excalidrawAPI={setExcalidrawApi}
         initialData={initialData || undefined}
         onChange={handleChange}
         onPointerUpdate={handlePointerUpdate}
