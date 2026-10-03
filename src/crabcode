@@ -18,6 +18,7 @@
 #   config scan       Auto-detect .env files and ports
 #   doctor            Diagnose common issues
 #   cheat             Show cheat sheet / help
+#   version           Show the installed crabcode version
 #   ports             Show port usage across workspaces
 #   wip save          Save work in progress
 #   wip ls            List saved WIP states
@@ -8261,6 +8262,7 @@ show_help() {
   echo "  ports             Show port usage"
   echo "  shared            Show shared volume info"
   echo "  cheat             Show cheat sheet"
+  echo "  version           Show the installed crabcode version"
   echo ""
   echo "Config: $CONFIG_FILE"
 }
@@ -11304,11 +11306,15 @@ handle_env_command() {
     "restore")
       env_restore "$@"
       ;;
+    "encrypt")
+      env_encrypt "$@"
+      ;;
     ""|"help"|"-h"|"--help")
       echo -e "${BOLD}crab env${NC} - Environment snapshot & restore"
       echo ""
       echo -e "  ${CYAN}crab env snapshot${NC}              Capture environment recipe"
       echo -e "  ${CYAN}crab env snapshot --dry-run${NC}    Preview what would be captured"
+      echo -e "  ${CYAN}crab env encrypt <staging-dir> [output-file]${NC} Retry snapshot encryption"
       echo -e "  ${CYAN}crab env restore --from FILE${NC}   Restore from snapshot"
       echo ""
       echo "Snapshot launches an AI agent to explore your machine and build"
@@ -11490,7 +11496,30 @@ PROMPT_EOF
     ${EDITOR:-vim} "$staging_dir/recipe.md"
   fi
 
-  # Package and encrypt
+  env_encrypt "$staging_dir" "$output_path"
+}
+
+# Encrypt a staging directory into a portable .enc bundle
+env_encrypt() {
+  local staging_dir="${1:-}"
+  local output_path="${2:-}"
+
+  if [ -z "$staging_dir" ] || [ ! -d "$staging_dir" ]; then
+    error "Staging directory not found: ${staging_dir:-<none>}"
+    return 1
+  fi
+
+  if [ ! -f "$staging_dir/recipe.md" ]; then
+    error "No recipe.md found in $staging_dir — is this a valid snapshot?"
+    return 1
+  fi
+
+  staging_dir=$(cd "$staging_dir" && pwd -P) || return 1
+  if [ "$staging_dir" = / ]; then
+    error "The filesystem root cannot be a staging directory"
+    return 1
+  fi
+
   echo ""
   echo -e "${CYAN}Encrypting snapshot...${NC}"
   echo -e "${GRAY}Choose a password to protect this snapshot.${NC}"
@@ -11499,13 +11528,31 @@ PROMPT_EOF
 
   # Determine output path
   if [ -z "$output_path" ]; then
+    local timestamp=$(date +%Y%m%d-%H%M%S)
     output_path="$ENV_SNAPSHOT_DIR/env-snapshot-$timestamp.enc"
   fi
-  mkdir -p "$(dirname "$output_path")"
+  mkdir -p "$(dirname "$output_path")" || return 1
+  local output_dir
+  output_dir=$(cd "$(dirname "$output_path")" && pwd -P) || return 1
+  output_path="$output_dir/$(basename "$output_path")"
+  case "$output_path" in
+    "$staging_dir"/*)
+      error "Output file must be outside the staging directory"
+      return 1
+      ;;
+  esac
+  if [ -e "$output_path" ] || [ -L "$output_path" ]; then
+    error "Output file already exists: $output_path"
+    return 1
+  fi
+
+  local encrypted_tmp
+  encrypted_tmp=$(mktemp "$output_dir/.crab-env-XXXXXX") || return 1
 
   # Encrypt with openssl (use pipefail to catch tar or openssl failures)
-  if ( set -o pipefail; tar czf - -C "$(dirname "$staging_dir")" "$(basename "$staging_dir")" \
-    | openssl enc -aes-256-cbc -pbkdf2 -salt -out "$output_path" ); then
+  if ( set -o pipefail; tar czf - -C "$(dirname "$staging_dir")" -- "$(basename "$staging_dir")" \
+    | openssl enc -aes-256-cbc -pbkdf2 -salt -out "$encrypted_tmp" ) \
+    && mv "$encrypted_tmp" "$output_path"; then
     # Clean up staging
     rm -rf "$staging_dir"
 
@@ -11518,6 +11565,7 @@ PROMPT_EOF
     echo -e "  2. Install crabcode: ${CYAN}curl -fsSL <install-url> | bash${NC}"
     echo -e "  3. Run: ${CYAN}crab env restore --from $output_path${NC}"
   else
+    rm -f "$encrypted_tmp"
     error "Encryption failed"
     echo "Unencrypted snapshot remains at: $staging_dir"
     return 1
@@ -12090,7 +12138,7 @@ main() {
       fi
       rm -f "$tmp_file"
       ;;
-    "--version"|"-v")
+    "version"|"--version"|"-v")
       echo '  /)🦀(\'
       echo "crabcode v$VERSION"
       ;;
