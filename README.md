@@ -345,9 +345,15 @@ Capture your entire dev environment and restore it on a new machine. An AI agent
 ```bash
 crab env snapshot              # Agent explores machine → encrypted bundle
 crab env snapshot --dry-run    # Preview what would be captured
+crab env encrypt STAGING_DIR   # Retry encryption without rerunning the agent
 crab env restore --from FILE   # Decrypt + agent sets up new machine
 crab env restore --from URL    # Download and restore from URL
 ```
+
+If snapshot encryption fails, retry with the staging directory printed by the
+command. An optional second argument selects the output file. The output must
+be a new file outside the staging directory. Successful encryption removes the
+staging directory; a failed attempt preserves it for retry.
 
 The snapshot captures: Homebrew packages, Node/Python/Go versions, shell config, git identity, editor settings, database schemas, Docker config, cloud tools, project inventory, .env files, and API tokens — all encrypted with a password.
 
