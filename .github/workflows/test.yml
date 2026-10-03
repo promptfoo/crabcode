@@ -64,6 +64,8 @@ jobs:
       - run: npm test
       - run: npm ci
         working-directory: plugins/draw/ui
+      - run: npm exec -- tsc --noEmit
+        working-directory: plugins/draw/ui
       - run: npm run build
         working-directory: plugins/draw/ui
       - run: npm run test:integration
