@@ -1599,7 +1599,7 @@
         <div class="terminal-preview">
           <div><span class="prompt">$</span> <span class="command">crab court 3230</span></div>
           <div class="output">⚖️  Assembling review tribunal...</div>
-          <div class="output">✓ Reviewer A (Claude): analyzing architecture impact</div>
+          <div class="output">✓ Reviewer A (Teammate): analyzing architecture impact</div>
           <div class="output">✓ Reviewer B (Codex): analyzing implementation correctness</div>
           <div class="output">✓ Judge: cross-referencing findings against source...</div>
           <div class="output">✓ Verdict delivered. 0 false positives. <span class="command">Justice served. 🦀</span></div>
@@ -1609,7 +1609,7 @@
       <div class="bento-card medium">
         <div class="icon">🎫</div>
         <h3>Ticket-Driven Development</h3>
-        <p>Connect workspaces directly to Linear tickets for automatic context injection. Branch naming, ticket metadata, and Claude context — all provisioned from a single identifier. Reduces ticket-to-first-commit latency by 76%.</p>
+        <p>Connect workspaces directly to Linear tickets for automatic context injection. Branch naming, ticket metadata, and agent context are all provisioned from a single identifier. Reduces ticket-to-first-commit latency by 76%.</p>
       </div>
 
       <div class="bento-card half">
@@ -1708,7 +1708,7 @@
         <div class="tmux-pane main">
           <span class="pane-label">main</span>
           <div class="pane-content">
-            <span style="color: var(--crab-shell);">claude</span> <span class="active">></span> <br>
+            <span style="color: var(--crab-shell);">codex</span> <span class="active">></span> <br>
             <br>
             AI pair programming<br>
             session operationalized. 🦀
@@ -1996,7 +1996,7 @@
         </div>
         <div class="command-item">
           <code>crab session resume &lt;name&gt;</code>
-          <p>Restore named Claude session with full context continuity</p>
+          <p>Restore named agent session with full context continuity</p>
         </div>
       </div>
     </div>
@@ -2473,7 +2473,7 @@
         lines: [
           { type: 'typed', text: '$ crab review 3230' },
           { type: 'output', text: '📋 Fetching PR context...' },
-          { type: 'output', text: '🤖 Claude reviewing...' },
+          { type: 'output', text: '🤖 Codex reviewing...' },
           { type: 'output', text: '✓ Review saved!' }
         ]
       },
@@ -2490,7 +2490,7 @@
           { type: 'typed', text: '$ crab ticket ENG-123' },
           { type: 'output', text: '🎫 Fetching ticket context...' },
           { type: 'output', text: '→ Workspace 4 provisioned' },
-          { type: 'output', text: '✓ Claude has ticket context' }
+          { type: 'output', text: '✓ Codex has ticket context' }
         ]
       },
       'crab projects': {

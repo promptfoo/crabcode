@@ -23,7 +23,7 @@ layout:
     - name: server
       command: uvicorn app.main:app --reload --port $API_PORT
     - name: main
-      command: claude --dangerously-skip-permissions
+      command: codex --full-auto
 
 env_sync:
   files:

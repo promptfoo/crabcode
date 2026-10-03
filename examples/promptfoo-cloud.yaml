@@ -23,7 +23,7 @@ layout:
     - name: server
       command: pnpm dev
     - name: main
-      command: claude --dangerously-skip-permissions --chrome
+      command: codex --full-auto
 
 env_sync:
   files:

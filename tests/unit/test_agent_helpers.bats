@@ -53,6 +53,17 @@ layout:
     - name: terminal
       command: ""
     - name: main
+      command: ""
+EOF
+
+  # Backward compat: infer Claude when old configs omitted agent but hardcoded the main command
+  cat > "${HOME}/.crabcode/projects/inferred-claude-project.yaml" << 'EOF'
+session_name: inferred-claude-test
+layout:
+  panes:
+    - name: terminal
+      command: ""
+    - name: main
       command: claude --dangerously-skip-permissions
 EOF
 }
@@ -79,29 +90,36 @@ teardown() {
   assert_output "claude"
 }
 
-@test "get_agent_type: defaults to claude when agent field missing" {
+@test "get_agent_type: defaults to codex when agent field missing and main pane is blank" {
   CONFIG_FILE="${HOME}/.crabcode/projects/no-agent-project.yaml"
+  run get_agent_type
+  assert_success
+  assert_output "codex"
+}
+
+@test "get_agent_type: infers claude from main pane command when agent field is missing" {
+  CONFIG_FILE="${HOME}/.crabcode/projects/inferred-claude-project.yaml"
   run get_agent_type
   assert_success
   assert_output "claude"
 }
 
-@test "get_agent_type: defaults to claude when config file missing" {
+@test "get_agent_type: defaults to codex when config file missing" {
   CONFIG_FILE="/nonexistent/path.yaml"
   run get_agent_type
   assert_success
-  assert_output "claude"
+  assert_output "codex"
 }
 
 # =============================================================================
 # get_agent_base_cmd
 # =============================================================================
 
-@test "get_agent_base_cmd: codex returns codex --full-auto" {
+@test "get_agent_base_cmd: codex returns codex --full-auto --skip-git-repo-check" {
   CONFIG_FILE="${HOME}/.crabcode/projects/codex-project.yaml"
   run get_agent_base_cmd
   assert_success
-  assert_output "codex --full-auto"
+  assert_output "codex --full-auto --skip-git-repo-check"
 }
 
 @test "get_agent_base_cmd: claude returns claude --dangerously-skip-permissions" {
@@ -176,11 +194,11 @@ teardown() {
   assert_output "Claude"
 }
 
-@test "agent_display_name: defaults to Claude" {
+@test "agent_display_name: defaults to Codex" {
   CONFIG_FILE="${HOME}/.crabcode/projects/no-agent-project.yaml"
   run agent_display_name
   assert_success
-  assert_output "Claude"
+  assert_output "Codex"
 }
 
 # =============================================================================
@@ -376,6 +394,20 @@ teardown() {
   agent_write_resume_file "${ws_dir}" ""
 
   [ ! -f "${ws_dir}/.codex-resume-session" ]
+}
+
+@test "get_pane_command: main defaults to codex base command when blank" {
+  CONFIG_FILE="${HOME}/.crabcode/projects/no-agent-project.yaml"
+  run get_pane_command "main"
+  assert_success
+  assert_output "codex --full-auto --skip-git-repo-check"
+}
+
+@test "get_pane_command: main preserves explicit claude command for old configs" {
+  CONFIG_FILE="${HOME}/.crabcode/projects/inferred-claude-project.yaml"
+  run get_pane_command "main"
+  assert_success
+  assert_output "claude --dangerously-skip-permissions"
 }
 
 # =============================================================================

@@ -469,7 +469,7 @@ Usage:
 
 Options:
   --setup              One-time configuration
-  --provider <str>     LLM provider (default: from config or openai:gpt-4o)
+  --provider <str>     LLM provider (default: from config or openai:gpt-5)
   --interval <ms>      Poll interval in ms (default: 5000)
   --verbose, -v        Show detailed output
   --help, -h           Show this help

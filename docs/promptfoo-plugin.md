@@ -91,7 +91,7 @@ promptfoo eval
 |------|-------------|
 | `--file`, `-f` | Input file path |
 | `--output`, `-o` | Output directory (default: current dir) |
-| `--provider` | LLM provider (default: `openai:gpt-4o`) |
+| `--provider` | LLM provider (default: `openai:gpt-5`) |
 | `--verbose`, `-v` | Show detailed agent output |
 | `--max-turns` | Max agent iterations (default: 30) |
 
