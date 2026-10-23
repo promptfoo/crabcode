@@ -62,6 +62,20 @@ teardown() {
   assert_output 'Previous backup'
 }
 
+@test "env encrypt preserves a dangling output symlink" {
+  local missing_target="$TEST_TMPDIR/missing-backup.enc"
+  ln -s "$missing_target" "$output_file"
+
+  run env_encrypt "$staging_dir" "$output_file"
+
+  assert_failure
+  assert_output --partial 'already exists'
+  [ -f "$staging_dir/recipe.md" ]
+  [ -L "$output_file" ]
+  [ "$(readlink "$output_file")" = "$missing_target" ]
+  [ ! -e "$missing_target" ]
+}
+
 @test "env encrypt rejects output inside staging including symlinked directories" {
   ln -s "$staging_dir" "$TEST_TMPDIR/link"
   for destination in "$staging_dir/snapshot.enc" "$TEST_TMPDIR/link/snapshot.enc"; do
