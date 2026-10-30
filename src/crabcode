@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # crabcode - Generic tmux-based workspace manager for multi-repo development
-# https://github.com/your-org/crabcode
+# https://github.com/promptfoo/crabcode
 #
 # Usage: crabcode [command] [arguments]
 #
