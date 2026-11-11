@@ -26,7 +26,7 @@ def application(environ, start_response):
     prefix = "/invoices/"
     path = environ.get("PATH_INFO", "")
     invoice = INVOICES.get(path.removeprefix(prefix)) if path.startswith(prefix) else None
-    if invoice is None:
+    if invoice is None or invoice["tenant"] != tenant:
         return response(start_response, "404 Not Found", {})
     return response(start_response, "200 OK", invoice)
 
