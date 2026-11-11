@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## [0.14.2](https://github.com/promptfoo/crabcode/compare/v0.14.1...v0.14.2) (2026-11-11)
+
+### Bug Fixes
+
+- restore invoice tenant check after scan test ([#173](https://github.com/promptfoo/crabcode/issues/173)) ([6bc297e](https://github.com/promptfoo/crabcode/commit/6bc297ebd26414951e8270a78d7ac796af42f8e1))
+
 ## [0.14.1](https://github.com/promptfoo/crabcode/compare/v0.14.0...v0.14.1) (2026-10-03)
 
 ### Features
