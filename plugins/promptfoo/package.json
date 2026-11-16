@@ -15,7 +15,7 @@
     "discover": "node --env-file=.env dist/cli.js"
   },
   "dependencies": {
-    "zod": "^4.0.0",
+    "zod": "^4.6.7",
     "yaml": "^2.7.0",
     "ws": "^8.18.0"
   },
@@ -23,7 +23,7 @@
     "@types/node": "^26.0.0",
     "@types/ws": "^8.5.0",
     "typescript": "^7.0.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "engines": {
     "node": ">=20.0.0"
