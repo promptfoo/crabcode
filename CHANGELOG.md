@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## [0.14.2](https://github.com/promptfoo/crabcode/compare/v0.14.1...v0.14.2) (2026-11-16)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump source-map-js from 1.2.1 to 1.2.2 in /plugins/promptfoo ([#161](https://github.com/promptfoo/crabcode/issues/161)) ([985ba8e](https://github.com/promptfoo/crabcode/commit/985ba8ed6e26f45ebd796064ad48d2d4811653a2))
+* **deps:** bump dompurify from 3.4.16 to 3.4.17 in /plugins/draw/ui ([#168](https://github.com/promptfoo/crabcode/issues/168)) ([0f26987](https://github.com/promptfoo/crabcode/commit/0f26987805b254f7990165d3e992d2fc881e6ac1))
+* **deps:** require the patched plugin dependency versions ([#179](https://github.com/promptfoo/crabcode/issues/179)) ([60ca267](https://github.com/promptfoo/crabcode/commit/60ca267c33094e27e7dae7cf08c3556ec6a4566e))
+* restore invoice tenant check after scan test ([#173](https://github.com/promptfoo/crabcode/issues/173)) ([6bc297e](https://github.com/promptfoo/crabcode/commit/6bc297ebd26414951e8270a78d7ac796af42f8e1))
+
 ## [0.14.1](https://github.com/promptfoo/crabcode/compare/v0.14.0...v0.14.1) (2026-10-03)
 
 ### Features
