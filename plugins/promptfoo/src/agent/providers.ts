@@ -154,7 +154,7 @@ export class AnthropicProvider implements LLMProvider {
 
   constructor(options: { apiKey?: string; model?: string; baseUrl?: string }) {
     this.apiKey = options.apiKey || process.env.ANTHROPIC_API_KEY || '';
-    this.model = options.model || 'claude-sonnet-4-20250514';
+    this.model = options.model || 'claude-sonnet-5-5';
     this.baseUrl = options.baseUrl || 'https://api.anthropic.com/v1';
 
     if (!this.apiKey) {
@@ -179,7 +179,8 @@ export class AnthropicProvider implements LLMProvider {
         messages: nonSystemMessages.map((m) => this.toAnthropicMessage(m)),
         tools: options.tools,
         max_tokens: options.maxTokens || 4096,
-        temperature: options.temperature ?? 0.7,
+        // Claude Sonnet 5.5 rejects non-default sampling parameters
+        ...(options.temperature !== undefined ? { temperature: options.temperature } : {}),
       }),
     });
 
@@ -269,7 +270,7 @@ export function createProvider(provider: string, options?: { reasoningEffort?: s
     case 'openai':
       return new OpenAIProvider({ model: model || 'gpt-5', reasoningEffort: options?.reasoningEffort });
     case 'anthropic':
-      return new AnthropicProvider({ model: model || 'claude-sonnet-4-20250514' });
+      return new AnthropicProvider({ model: model || 'claude-sonnet-5-5' });
     default:
       throw new Error(`Unknown provider: ${type}. Supported: openai, anthropic`);
   }

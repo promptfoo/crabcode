@@ -155,7 +155,7 @@ Supported input formats:
 Environment variables:
   OPENAI_API_KEY         OpenAI API key
   ANTHROPIC_API_KEY      Anthropic API key
-  DISCOVERY_PROVIDER     Default provider (e.g., anthropic:claude-sonnet-4-20250514)
+  DISCOVERY_PROVIDER     Default provider (e.g., anthropic:claude-sonnet-5-5)
 
 Examples:
   # From curl command
@@ -165,7 +165,7 @@ Examples:
   crab pf --file betty-api.txt --output ./betty-config
 
   # Using Anthropic
-  crab pf --file target.txt --provider anthropic:claude-sonnet-4-20250514
+  crab pf --file target.txt --provider anthropic:claude-sonnet-5-5
 
 Subcommands:
   serve                  Run Slack polling daemon

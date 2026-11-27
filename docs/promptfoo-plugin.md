@@ -25,7 +25,7 @@ crab pf "curl -X POST http://localhost:8080/chat -d '{\"message\":\"hi\"}'"
 crab pf --file api-spec.json --output ./my-config
 
 # Use Anthropic instead of OpenAI
-crab pf --file target.txt --provider anthropic:claude-sonnet-4-20250514
+crab pf --file target.txt --provider anthropic:claude-sonnet-5-5
 
 # Verbose output (see agent reasoning)
 crab pf --file target.txt --verbose
@@ -101,7 +101,7 @@ promptfoo eval
 |----------|-------------|
 | `OPENAI_API_KEY` | OpenAI API key |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
-| `DISCOVERY_PROVIDER` | Default provider (e.g., `anthropic:claude-sonnet-4-20250514`) |
+| `DISCOVERY_PROVIDER` | Default provider (e.g., `anthropic:claude-sonnet-5-5`) |
 
 ## Uninstall
 
